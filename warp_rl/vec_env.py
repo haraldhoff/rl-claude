@@ -226,6 +226,16 @@ class WarpVecEnv:
             )
         return self.obs, self.rewards, self.terminated, self.truncated, {"final_observation": self.final_obs}
 
+    # -- rendering ----------------------------------------------------------
+
+    def render_state(self) -> dict:
+        """Host copies of everything the renderer needs (see rl_common.render)."""
+        return {
+            "obs": self.obs.numpy(),
+            "steps": self.steps.numpy(),
+            "ep_return": self.ep_return.numpy(),
+        }
+
     # -- logging ------------------------------------------------------------
 
     def pop_episode_stats(self) -> tuple[float, float, int]:

@@ -18,28 +18,17 @@ return is directly comparable to MountainCar-v0's.
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import warp as wp
 
-from ..render import TiledRenderer
+from rl_common.specs import mountain_car as spec
+
 from ..vec_env import WarpVecEnv
 
 
 # ---------------------------------------------------------------------------
 # parameters
 # ---------------------------------------------------------------------------
-
-MIN_POSITION = -1.2
-MAX_POSITION = 0.6
-MAX_SPEED = 0.07
-GOAL_POSITION = 0.5
-GOAL_VELOCITY = 0.0
-FORCE = 0.001
-GRAVITY = 0.0025
-RESET_LOW = -0.6
-RESET_HIGH = -0.4
 
 
 @wp.struct
@@ -57,21 +46,16 @@ class MountainCarParams:
 
 def default_params() -> MountainCarParams:
     p = MountainCarParams()
-    p.min_position = MIN_POSITION
-    p.max_position = MAX_POSITION
-    p.max_speed = MAX_SPEED
-    p.goal_position = GOAL_POSITION
-    p.goal_velocity = GOAL_VELOCITY
-    p.force = FORCE
-    p.gravity = GRAVITY
-    p.reset_low = RESET_LOW
-    p.reset_high = RESET_HIGH
+    p.min_position = spec.MIN_POSITION
+    p.max_position = spec.MAX_POSITION
+    p.max_speed = spec.MAX_SPEED
+    p.goal_position = spec.GOAL_POSITION
+    p.goal_velocity = spec.GOAL_VELOCITY
+    p.force = spec.FORCE
+    p.gravity = spec.GRAVITY
+    p.reset_low = spec.RESET_LOW
+    p.reset_high = spec.RESET_HIGH
     return p
-
-
-def height(x):
-    """Terrain profile, as Gymnasium draws it."""
-    return np.sin(3.0 * np.asarray(x)) * 0.45 + 0.55
 
 
 # ---------------------------------------------------------------------------
@@ -147,10 +131,17 @@ class MountainCarVectorEnv(WarpVecEnv):
     """
 
     env_id = "mountaincar"
-    obs_dim = 2
-    num_actions = 3
+    obs_dim = spec.OBS_DIM
+    num_actions = spec.NUM_ACTIONS
 
-    def __init__(self, num_envs: int = 1, *, max_episode_steps: int = 200, action_repeat: int = 1, **kwargs):
+    def __init__(
+        self,
+        num_envs: int = 1,
+        *,
+        max_episode_steps: int = spec.MAX_EPISODE_STEPS,
+        action_repeat: int = 1,
+        **kwargs,
+    ):
         self.params = default_params()
         self.action_repeat = int(action_repeat)
         super().__init__(num_envs, max_episode_steps=max_episode_steps, **kwargs)
@@ -161,7 +152,7 @@ class MountainCarVectorEnv(WarpVecEnv):
         return self.max_episode_steps * self.action_repeat
 
     def observation_high(self) -> np.ndarray:
-        return np.array([MAX_POSITION, MAX_SPEED], dtype=np.float32)
+        return np.array([spec.MAX_POSITION, spec.MAX_SPEED], dtype=np.float32)
 
     def _build_spaces(self) -> None:
         super()._build_spaces()
@@ -169,8 +160,8 @@ class MountainCarVectorEnv(WarpVecEnv):
             from gymnasium import spaces
         except Exception:  # pragma: no cover
             return
-        low = np.array([MIN_POSITION, -MAX_SPEED], dtype=np.float32)
-        high = np.array([MAX_POSITION, MAX_SPEED], dtype=np.float32)
+        low = np.array([spec.MIN_POSITION, -spec.MAX_SPEED], dtype=np.float32)
+        high = np.array([spec.MAX_POSITION, spec.MAX_SPEED], dtype=np.float32)
         self.single_observation_space = spaces.Box(low, high, dtype=np.float32)
         self.observation_space = spaces.Box(
             np.tile(low, (self.num_envs, 1)), np.tile(high, (self.num_envs, 1)), dtype=np.float32
@@ -208,79 +199,3 @@ class MountainCarVectorEnv(WarpVecEnv):
         self.steps.zero_()
         self.ep_return.zero_()
         self.ep_length.zero_()
-
-
-# ---------------------------------------------------------------------------
-# renderer
-# ---------------------------------------------------------------------------
-
-_HILL = (60, 60, 70)
-_GROUND = (215, 215, 225)
-_CAR = (20, 20, 30)
-_WHEEL = (128, 128, 128)
-_FLAG_POLE = (20, 20, 30)
-_FLAG = (204, 204, 0)
-
-_CAR_W, _CAR_H = 40.0, 20.0
-_CLEARANCE = 10.0
-
-
-class MountainCarRenderer(TiledRenderer):
-    """The classic-control mountain car picture, drawn from the device state."""
-
-    def setup(self) -> None:
-        self.scale = self.tile_w / (MAX_POSITION - MIN_POSITION)
-        self.xs = np.linspace(MIN_POSITION, MAX_POSITION, 100)
-        self.ys = height(self.xs)
-
-    def stats_label(self, index: int) -> str:
-        position, velocity = self.states[index]
-        return (
-            f"env {index}  t={int(self.steps[index]):3d}  R={self.returns[index]:.0f}  "
-            f"x={position:+.2f}  v={velocity:+.3f}"
-        )
-
-    def _to_screen(self, origin, x, y) -> tuple[float, float]:
-        # y is measured up from the bottom of the tile, in "height" units
-        return (
-            float(origin[0] + (x - MIN_POSITION) * self.scale),
-            float(origin[1] + self.tile_h - y * self.scale),
-        )
-
-    def draw_tile(self, origin: tuple[float, float], index: int) -> None:
-        import pygame
-
-        surf = self.surface
-        hill = [self._to_screen(origin, x, y) for x, y in zip(self.xs, self.ys)]
-        pygame.draw.polygon(
-            surf,
-            _GROUND,
-            [self._to_screen(origin, MIN_POSITION, 0.0), *hill, self._to_screen(origin, MAX_POSITION, 0.0)],
-        )
-        pygame.draw.lines(surf, _HILL, False, hill, max(1, int(2 * self.k)))
-
-        # flag on the goal
-        flag_base = self._to_screen(origin, GOAL_POSITION, float(height(GOAL_POSITION)))
-        flag_top = (flag_base[0], flag_base[1] - 50 * self.k)
-        pygame.draw.line(surf, _FLAG_POLE, flag_base, flag_top, max(1, int(2 * self.k)))
-        pygame.draw.polygon(
-            surf,
-            _FLAG,
-            [flag_top, (flag_top[0] + 25 * self.k, flag_top[1] + 10 * self.k), (flag_top[0], flag_top[1] + 20 * self.k)],
-        )
-
-        # car: a box rotated to the slope, sitting `clearance` above the curve
-        position = float(self.states[index, 0])
-        angle = math.cos(3.0 * position)  # Gymnasium rotates by cos(3x) directly
-        c, s = math.cos(angle), math.sin(angle)
-        base = self._to_screen(origin, position, float(height(position)))
-        base = (base[0], base[1] - _CLEARANCE * self.k)
-
-        def place(px, py):
-            px, py = px * self.k, py * self.k
-            return (base[0] + c * px - s * py, base[1] - (s * px + c * py))
-
-        body = [place(x, y) for x, y in ((-_CAR_W / 2, 0.0), (-_CAR_W / 2, _CAR_H), (_CAR_W / 2, _CAR_H), (_CAR_W / 2, 0.0))]
-        pygame.draw.polygon(surf, _CAR, body)
-        for wheel_x in (-_CAR_W / 4, _CAR_W / 4):
-            pygame.draw.circle(surf, _WHEEL, place(wheel_x, 0.0), max(2.0, _CAR_H / 2.5 * self.k))

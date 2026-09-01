@@ -1,7 +1,11 @@
-"""Correctness checks for the PPO kernels (GAE, loss gradients) and a smoke
-test that training actually improves the policy.
+"""Correctness checks for the Warp backend's PPO machinery.
 
-Run with pytest, or directly:  python tests/test_ppo.py
+These cover what is specific to the Warp implementation: the GAE kernel, the
+``wp.Tape`` gradients behind the clipped surrogate loss, and CUDA-graph capture.
+The JAX side is covered by ``tests/test_backend_parity.py``, which pins its GAE,
+its networks and its learning curve to these.
+
+Run with pytest, or directly:  python tests/test_warp_ppo.py
 """
 
 from __future__ import annotations
@@ -14,7 +18,9 @@ import warp as wp
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from warp_rl import PPO, PPOConfig  # noqa: E402
+import rl_common  # noqa: E402
+from rl_common import PPOConfig  # noqa: E402
+from warp_rl import PPO  # noqa: E402
 from warp_rl import kernels as K  # noqa: E402
 
 
@@ -56,6 +62,7 @@ def test_gae_matches_numpy_reference():
 
 def _make_trainer(**kwargs) -> PPO:
     cfg = PPOConfig(
+        backend="warp",
         num_envs=8,
         num_steps=8,
         num_minibatches=1,
@@ -140,8 +147,10 @@ def test_loss_gradients_match_finite_differences():
 
 
 def test_training_improves_return():
-    cfg = PPOConfig(num_envs=128, num_steps=32, total_timesteps=128 * 32 * 12, seed=0)
-    trainer = PPO(cfg)
+    cfg = rl_common.default_config(
+        "cartpole", backend="warp", num_envs=128, num_steps=32, total_timesteps=128 * 32 * 12, seed=0
+    )
+    trainer = rl_common.make_trainer(cfg)
     history = []
     trainer.train(callback=lambda s: history.append(s["episodic_return"]))
 
@@ -163,7 +172,9 @@ def test_rollout_graph_matches_eager():
         return
     outputs = []
     for use_graph in (False, True):
-        cfg = PPOConfig(num_envs=64, num_steps=8, total_timesteps=64 * 8 * 3, seed=1, use_graph=use_graph)
+        cfg = PPOConfig(
+            backend="warp", num_envs=64, num_steps=8, total_timesteps=64 * 8 * 3, seed=1, use_graph=use_graph
+        )
         trainer = PPO(cfg)
         trainer.env.reset(seed=cfg.seed)
         for _ in range(3):  # third rollout is graph-replayed when use_graph=True

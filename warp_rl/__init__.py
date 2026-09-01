@@ -1,26 +1,7 @@
-"""Reinforcement learning on NVIDIA Warp + warp-nn.
+"""Warp backend: environments as Warp kernels, networks and PPO on warp-nn."""
 
-``warp_rl`` holds everything environment-agnostic (the vectorized-env base
-class, the PPO trainer and its kernels, the networks, the renderer scaffolding)
-while ``warp_rl.envs`` holds one module per environment: its physics kernels,
-its env class and its renderer.
-"""
-
-from .models import ActorCritic, mlp
-from .ppo import PPO, PPOConfig
-from .registry import EnvSpec, default_config, env_ids, make, make_renderer, spec
+from .agent import ActorCritic, mlp
+from .ppo import PPO
 from .vec_env import WarpVecEnv
 
-__all__ = [
-    "ActorCritic",
-    "EnvSpec",
-    "PPO",
-    "PPOConfig",
-    "WarpVecEnv",
-    "default_config",
-    "env_ids",
-    "make",
-    "make_renderer",
-    "mlp",
-    "spec",
-]
+__all__ = ["ActorCritic", "PPO", "WarpVecEnv", "mlp"]

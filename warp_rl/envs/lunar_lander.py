@@ -32,111 +32,9 @@ import math
 import numpy as np
 import warp as wp
 
-from ..render import TiledRenderer
+from rl_common.specs import lunar_lander as spec
+
 from ..vec_env import WarpVecEnv
-
-
-# ---------------------------------------------------------------------------
-# constants (Gymnasium's, verbatim)
-# ---------------------------------------------------------------------------
-
-FPS = 50.0
-SCALE = 30.0
-MAIN_ENGINE_POWER = 13.0
-SIDE_ENGINE_POWER = 0.6
-INITIAL_RANDOM = 1000.0
-
-LANDER_POLY = [(-14, +17), (-17, 0), (-17, -10), (+17, -10), (+17, 0), (+14, +17)]
-LEG_AWAY = 20.0
-LEG_DOWN = 18.0
-LEG_W = 2.0
-LEG_H = 8.0
-SIDE_ENGINE_HEIGHT = 14.0
-SIDE_ENGINE_AWAY = 12.0
-
-VIEWPORT_W = 600.0
-VIEWPORT_H = 400.0
-WORLD_W = VIEWPORT_W / SCALE  # 20.0
-WORLD_H = VIEWPORT_H / SCALE  # 13.33
-CHUNKS = 11
-HELIPAD_Y = WORLD_H / 4.0
-
-GRAVITY = -10.0
-HULL_DENSITY = 5.0
-LEG_DENSITY = 1.0
-
-# contact model (see the module docstring: this is where we leave Box2D behind)
-CONTACT_STIFFNESS = 3000.0
-CONTACT_DAMPING = 120.0
-CONTACT_FRICTION = 0.5
-CONTACT_TANGENT_DAMPING = 200.0
-SUBSTEPS = 8
-# our compliant legs would otherwise absorb an unsurvivable slam: touching down
-# faster than this counts as a crash, standing in for Box2D's legs snapping and
-# the hull hitting the ground
-CRASH_SPEED = 4.0
-
-SLEEP_V = 0.06  # m/s
-SLEEP_W = 0.06  # rad/s
-SLEEP_STEPS = 25  # 0.5 s at 50 Hz, matching Box2D's b2_timeToSleep
-
-
-def _polygon_properties(points: list[tuple[float, float]], density: float):
-    """Mass, centroid and inertia about the centroid of a uniform polygon."""
-    pts = np.asarray(points, dtype=np.float64)
-    x, y = pts[:, 0], pts[:, 1]
-    x1, y1 = np.roll(x, -1), np.roll(y, -1)
-    cross = x * y1 - x1 * y
-    area = 0.5 * cross.sum()
-    cx = (cross * (x + x1)).sum() / (6.0 * area)
-    cy = (cross * (y + y1)).sum() / (6.0 * area)
-    # second moment about the origin, then shifted to the centroid
-    inertia = (cross * (x * x + x * x1 + x1 * x1 + y * y + y * y1 + y1 * y1)).sum() / 12.0
-    mass = density * abs(area)
-    inertia = density * abs(inertia) - mass * (cx * cx + cy * cy)
-    return mass, np.array([cx, cy]), inertia
-
-
-def _box(cx: float, cy: float, half_w: float, half_h: float):
-    return [
-        (cx - half_w, cy - half_h),
-        (cx + half_w, cy - half_h),
-        (cx + half_w, cy + half_h),
-        (cx - half_w, cy + half_h),
-    ]
-
-
-def _body_properties():
-    """Rigid-body properties of the hull plus the two welded legs."""
-    hull = [(px / SCALE, py / SCALE) for px, py in LANDER_POLY]
-    parts = [(hull, HULL_DENSITY)]
-    for sign in (-1.0, 1.0):
-        parts.append(
-            (
-                _box(sign * LEG_AWAY / SCALE, -LEG_DOWN / SCALE, LEG_W / SCALE, LEG_H / SCALE),
-                LEG_DENSITY,
-            )
-        )
-    masses, centroids, inertias = [], [], []
-    for points, density in parts:
-        m, c, i = _polygon_properties(points, density)
-        masses.append(m)
-        centroids.append(c)
-        inertias.append(i)
-    mass = float(sum(masses))
-    com = sum(m * c for m, c in zip(masses, centroids)) / mass
-    inertia = float(sum(i + m * float(np.dot(c - com, c - com)) for m, c, i in zip(masses, centroids, inertias)))
-    return mass, com.astype(np.float32), inertia
-
-
-MASS, COM, INERTIA = _body_properties()
-
-# contact points, in body-origin coordinates
-LEG_POINTS = np.array(
-    [[-LEG_AWAY / SCALE, -(LEG_DOWN + LEG_H) / SCALE], [LEG_AWAY / SCALE, -(LEG_DOWN + LEG_H) / SCALE]],
-    dtype=np.float32,
-)
-HULL_POINTS = np.array([[px / SCALE, py / SCALE] for px, py in LANDER_POLY], dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -172,28 +70,28 @@ class LanderParams:
 
 def default_params() -> LanderParams:
     p = LanderParams()
-    p.gravity = GRAVITY
-    p.dt = 1.0 / FPS
-    p.substeps = SUBSTEPS
-    p.mass = MASS
-    p.inertia = INERTIA
-    p.com = wp.vec2(float(COM[0]), float(COM[1]))
-    p.main_power = MAIN_ENGINE_POWER
-    p.side_power = SIDE_ENGINE_POWER
-    p.contact_k = CONTACT_STIFFNESS
-    p.contact_c = CONTACT_DAMPING
-    p.contact_mu = CONTACT_FRICTION
-    p.contact_kt = CONTACT_TANGENT_DAMPING
-    p.crash_speed = CRASH_SPEED
-    p.world_w = WORLD_W
-    p.world_h = WORLD_H
-    p.helipad_y = HELIPAD_Y
-    p.chunk_dx = WORLD_W / (CHUNKS - 1)
-    p.leg_down = LEG_DOWN / SCALE
-    p.initial_random = INITIAL_RANDOM
-    p.sleep_v = SLEEP_V
-    p.sleep_w = SLEEP_W
-    p.sleep_steps = SLEEP_STEPS
+    p.gravity = spec.GRAVITY
+    p.dt = 1.0 / spec.FPS
+    p.substeps = spec.SUBSTEPS
+    p.mass = spec.MASS
+    p.inertia = spec.INERTIA
+    p.com = wp.vec2(float(spec.COM[0]), float(spec.COM[1]))
+    p.main_power = spec.MAIN_ENGINE_POWER
+    p.side_power = spec.SIDE_ENGINE_POWER
+    p.contact_k = spec.CONTACT_STIFFNESS
+    p.contact_c = spec.CONTACT_DAMPING
+    p.contact_mu = spec.CONTACT_FRICTION
+    p.contact_kt = spec.CONTACT_TANGENT_DAMPING
+    p.crash_speed = spec.CRASH_SPEED
+    p.world_w = spec.WORLD_W
+    p.world_h = spec.WORLD_H
+    p.helipad_y = spec.HELIPAD_Y
+    p.chunk_dx = spec.CHUNK_DX
+    p.leg_down = spec.LEG_DOWN / spec.SCALE
+    p.initial_random = spec.INITIAL_RANDOM
+    p.sleep_v = spec.SLEEP_V
+    p.sleep_w = spec.SLEEP_W
+    p.sleep_steps = spec.SLEEP_STEPS
     return p
 
 
@@ -329,6 +227,23 @@ def reset_kernel(
     sleep_counter[i] = 0
 
     prev_shaping[i] = write_observation(params, i, com, vel, 0.0, 0.0, 0.0, 0.0, obs)
+
+
+@wp.kernel(enable_backward=False)
+def refresh_kernel(
+    params: LanderParams,
+    body: wp.array2d(dtype=wp.float32),
+    contacts: wp.array2d(dtype=wp.float32),
+    prev_shaping: wp.array(dtype=wp.float32),
+    obs: wp.array2d(dtype=wp.float32),
+):
+    """Rewrite the observation and shaping baseline after set_state()."""
+    i = wp.tid()
+    com = wp.vec2(body[i, 0], body[i, 1])
+    vel = wp.vec2(body[i, 2], body[i, 3])
+    prev_shaping[i] = write_observation(
+        params, i, com, vel, body[i, 4], body[i, 5], contacts[i, 0], contacts[i, 1], obs
+    )
 
 
 @wp.kernel(enable_backward=False)
@@ -483,10 +398,10 @@ class LunarLanderVectorEnv(WarpVecEnv):
     """
 
     env_id = "lunarlander"
-    obs_dim = 8
-    num_actions = 4
+    obs_dim = spec.OBS_DIM
+    num_actions = spec.NUM_ACTIONS
 
-    def __init__(self, num_envs: int = 1, *, max_episode_steps: int = 1000, **kwargs):
+    def __init__(self, num_envs: int = 1, *, max_episode_steps: int = spec.MAX_EPISODE_STEPS, **kwargs):
         self.params = default_params()
         super().__init__(num_envs, max_episode_steps=max_episode_steps, **kwargs)
 
@@ -494,17 +409,45 @@ class LunarLanderVectorEnv(WarpVecEnv):
         self.body = wp.zeros((n, 6), dtype=wp.float32, device=d)
         self.contacts = wp.zeros((n, 2), dtype=wp.float32, device=d)
         self.engine = wp.zeros((n, 2), dtype=wp.float32, device=d)
-        self.terrain = wp.zeros((n, CHUNKS), dtype=wp.float32, device=d)
-        self._raw_terrain = wp.zeros((n, CHUNKS + 1), dtype=wp.float32, device=d)
+        self.terrain = wp.zeros((n, spec.CHUNKS), dtype=wp.float32, device=d)
+        self._raw_terrain = wp.zeros((n, spec.CHUNKS + 1), dtype=wp.float32, device=d)
         self.prev_shaping = wp.zeros(n, dtype=wp.float32, device=d)
         self.sleep_counter = wp.zeros(n, dtype=wp.int32, device=d)
 
-        self.leg_points = wp.array(LEG_POINTS, dtype=wp.vec2, device=d)
-        self.hull_points = wp.array(HULL_POINTS, dtype=wp.vec2, device=d)
+        self.leg_points = wp.array(spec.LEG_POINTS, dtype=wp.vec2, device=d)
+        self.hull_points = wp.array(spec.HULL_POINTS, dtype=wp.vec2, device=d)
 
     def observation_high(self) -> np.ndarray:
         # matches LunarLander-v3's declared observation space
         return np.array([2.5, 2.5, 10.0, 10.0, 2.0 * math.pi, 10.0, 1.0, 1.0], dtype=np.float32)
+
+    def set_state(self, body, terrain=None) -> None:
+        """Overwrite the rigid-body state (and optionally the terrain)."""
+        self.body.assign(np.asarray(body, dtype=np.float32).reshape(self.num_envs, 6))
+        if terrain is not None:
+            self.terrain.assign(np.asarray(terrain, dtype=np.float32).reshape(self.num_envs, spec.CHUNKS))
+        self.contacts.zero_()
+        self.engine.zero_()
+        self.sleep_counter.zero_()
+        self.steps.zero_()
+        self.ep_return.zero_()
+        self.ep_length.zero_()
+        wp.launch(
+            refresh_kernel,
+            dim=self.num_envs,
+            inputs=[self.params, self.body, self.contacts, self.prev_shaping, self.obs],
+            device=self.device,
+        )
+
+    def render_state(self) -> dict:
+        return {
+            "body": self.body.numpy(),
+            "terrain": self.terrain.numpy(),
+            "contacts": self.contacts.numpy(),
+            "engine": self.engine.numpy(),
+            "steps": self.steps.numpy(),
+            "ep_return": self.ep_return.numpy(),
+        }
 
     def _reset(self) -> None:
         wp.launch(
@@ -550,136 +493,3 @@ class LunarLanderVectorEnv(WarpVecEnv):
             ],
             device=self.device,
         )
-
-
-# ---------------------------------------------------------------------------
-# renderer
-# ---------------------------------------------------------------------------
-
-_SKY = (5, 5, 15)
-_MOON = (140, 140, 150)
-_MOON_EDGE = (255, 255, 255)
-_LANDER = (128, 102, 230)
-_LANDER_EDGE = (90, 70, 170)
-_LEG = (180, 165, 235)
-_FLAG = (204, 204, 0)
-_FLAME = (255, 160, 40)
-_CONTACT = (120, 230, 140)
-_PAD = (90, 90, 110)
-
-
-class LunarLanderRenderer(TiledRenderer):
-    """Draws the moon surface, the helipad flags, the lander and its exhaust."""
-
-    background = _SKY
-
-    def setup(self) -> None:
-        self.scale = self.tile_w / WORLD_W  # px per metre
-        self.chunk_x = np.linspace(0.0, WORLD_W, CHUNKS)
-
-    def fetch(self) -> None:
-        self.body = self.env.body.numpy()
-        self.terrain = self.env.terrain.numpy()
-        self.contacts = self.env.contacts.numpy()
-        self.engine = self.env.engine.numpy()
-        self.steps = self.env.steps.numpy()
-        self.returns = self.env.ep_return.numpy()
-
-    def stats_label(self, index: int) -> str:
-        x, y, vx, vy, angle, _ = self.body[index]
-        legs = int(self.contacts[index].sum())
-        return (
-            f"env {index}  t={int(self.steps[index]):4d}  R={self.returns[index]:+7.1f}  "
-            f"v=({vx:+.1f},{vy:+.1f})  th={math.degrees(angle):+5.1f}  legs={legs}"
-        )
-
-    def _to_screen(self, origin, x, y) -> tuple[float, float]:
-        # plain floats: pygame rejects numpy scalars in point sequences
-        return (float(origin[0] + x * self.scale), float(origin[1] + self.tile_h - y * self.scale))
-
-    def draw_tile(self, origin: tuple[float, float], index: int) -> None:
-        import pygame
-
-        surf = self.surface
-        heights = self.terrain[index]
-
-        # moon surface
-        ground = [self._to_screen(origin, x, h) for x, h in zip(self.chunk_x, heights)]
-        polygon = [
-            self._to_screen(origin, 0.0, 0.0),
-            *ground,
-            self._to_screen(origin, WORLD_W, 0.0),
-        ]
-        pygame.draw.polygon(surf, _MOON, polygon)
-        pygame.draw.lines(surf, _MOON_EDGE, False, ground, max(1, int(2 * self.k)))
-
-        # helipad: flat chunks 4..6, flagged at both ends
-        pad_left = self.chunk_x[CHUNKS // 2 - 1]
-        pad_right = self.chunk_x[CHUNKS // 2 + 1]
-        pad_y = float(heights[CHUNKS // 2])
-        pygame.draw.line(
-            surf,
-            _PAD,
-            self._to_screen(origin, pad_left, pad_y),
-            self._to_screen(origin, pad_right, pad_y),
-            max(2, int(4 * self.k)),
-        )
-        for fx in (pad_left, pad_right):
-            base = self._to_screen(origin, fx, pad_y)
-            top = self._to_screen(origin, fx, pad_y + 1.0)
-            pygame.draw.line(surf, _MOON_EDGE, base, top, max(1, int(2 * self.k)))
-            pygame.draw.polygon(
-                surf,
-                _FLAG,
-                [top, (top[0] + 12 * self.k, top[1] + 6 * self.k), (top[0], top[1] + 12 * self.k)],
-            )
-
-        # lander
-        x, y, _, _, angle, _ = self.body[index]
-        com = np.array([x, y], dtype=np.float64)
-        c, s = math.cos(angle), math.sin(angle)
-
-        def to_world(point):
-            local = np.asarray(point, dtype=np.float64) - COM
-            return com + np.array([c * local[0] - s * local[1], s * local[0] + c * local[1]])
-
-        hull = [self._to_screen(origin, *to_world(p)) for p in HULL_POINTS]
-        pygame.draw.polygon(surf, _LANDER, hull)
-        pygame.draw.polygon(surf, _LANDER_EDGE, hull, max(1, int(2 * self.k)))
-
-        for leg in range(2):
-            sign = -1.0 if leg == 0 else 1.0
-            hip = to_world((sign * LEG_AWAY / SCALE, -LEG_DOWN / SCALE + LEG_H / SCALE))
-            foot = to_world(LEG_POINTS[leg])
-            colour = _CONTACT if self.contacts[index, leg] > 0 else _LEG
-            pygame.draw.line(
-                surf,
-                colour,
-                self._to_screen(origin, *hip),
-                self._to_screen(origin, *foot),
-                max(2, int(4 * self.k)),
-            )
-
-        # exhaust
-        main, side = self.engine[index]
-        if main > 0:
-            nozzle = to_world((0.0, -LEG_DOWN / SCALE))
-            plume = to_world((0.0, -LEG_DOWN / SCALE - 0.55))
-            pygame.draw.line(
-                surf,
-                _FLAME,
-                self._to_screen(origin, *nozzle),
-                self._to_screen(origin, *plume),
-                max(2, int(6 * self.k)),
-            )
-        if side != 0:
-            direction = -1.0 if side > 0 else 1.0
-            nozzle = to_world((direction * 17.0 / SCALE, SIDE_ENGINE_HEIGHT / SCALE - LEG_DOWN / SCALE))
-            plume = to_world((direction * (17.0 / SCALE + 0.4), SIDE_ENGINE_HEIGHT / SCALE - LEG_DOWN / SCALE))
-            pygame.draw.line(
-                surf,
-                _FLAME,
-                self._to_screen(origin, *nozzle),
-                self._to_screen(origin, *plume),
-                max(2, int(4 * self.k)),
-            )

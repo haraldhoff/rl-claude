@@ -1,19 +1,20 @@
-# Reinforcement learning in NVIDIA Warp + warp-nn
+# Reinforcement learning in NVIDIA Warp, JAX and Stable-Baselines3
 
-Gymnasium-style environments written entirely in [NVIDIA Warp](https://github.com/NVIDIA/warp)
-kernels, plus a PPO training loop built on [warp-nn](https://pypi.org/project/warp-nn/)
-(`Linear`, `Tanh`, `Adam`) and `wp.Tape` autodiff. No PyTorch, no JAX, no Box2D --
-the physics, the policy, the advantage estimation and the loss all live on the
-device, and a whole rollout (or update epoch) replays as a single CUDA graph.
-
-Three environments so far: **CartPole**, **Lunar Lander** and **Mountain Car**.
+Three classic-control environments and a PPO trainer, implemented three times:
+in [NVIDIA Warp](https://github.com/NVIDIA/warp) kernels with
+[warp-nn](https://pypi.org/project/warp-nn/), in JAX + Flax + optax, and -- via a
+Gymnasium adapter -- with [Stable-Baselines3](https://github.com/DLR-RM/stable-baselines3)'s
+reference PPO. Everything that does not depend on *how* the maths is computed --
+the environment specifications, the hyperparameters, the registry, the renderers,
+the training-loop and evaluation scaffolding -- lives once, in `rl_common`.
 
 ```
-python train.py --env cartpole     --save weights/cartpole.npz      # seconds  -> return 500
-python train.py --env lunarlander  --save weights/lunarlander.npz   # ~1 min   -> return ~275
-python train.py --env mountaincar  --save weights/mountaincar.npz   # ~8 s     -> return ~-102
-python play.py  --env lunarlander  --weights weights/lunarlander.npz   # watch it fly
-python -m pytest tests -q                                           # 22 checks
+python train.py --env cartpole                       # warp (default backend)
+python train.py --env cartpole --backend jax        # the same run in JAX + Flax
+python train.py --env cartpole --backend sb3        # ... or SB3's reference PPO
+python train.py --env cartpole --backend sb3 --env-backend gym   # SB3 on stock Gymnasium
+python play.py  --env lunarlander --weights weights/lunarlander.npz   # watch it fly
+python -m pytest tests -q                            # 62 checks, all backends
 ```
 
 ![lunar lander landing on the pad](media/lunarlander.gif)
@@ -22,231 +23,263 @@ python -m pytest tests -q                                           # 22 checks
 
 ## Results
 
-| environment | greedy evaluation (128 episodes) | budget | wall clock | solved threshold |
-| --- | --- | --- | --- | --- |
-| cartpole | **500.0 +/- 0.0** (min 500) | 500k steps | ~3-8 s | 475 |
-| lunarlander | **274.5 +/- 18.6** (min 234, max 312, mean length 218) | 16M steps | ~60 s | 200 |
-| mountaincar | **-102.0 +/- 8.8** (min -110, max -83) | 4M decisions | ~8 s | -110 |
+Greedy evaluation over 128 episodes, with each environment's recommended
+settings -- the same hyperparameters for all three backends.
 
-End-to-end throughput on an RTX 5060 is 85k-170k env steps/s for cartpole and
-250k-290k steps/s for the lander, *including* the PPO update; the rollout alone runs
-at several million steps/s. For reference, Gymnasium's own
-`demo_heuristic_lander` controller scores 249.8 in this environment (see below).
+| environment | warp | jax | sb3 | budget | solved |
+| --- | --- | --- | --- | --- | --- |
+| cartpole | **500.0 +/- 0.0** | **500.0 +/- 0.0** | **500.0 +/- 0.0** | 500k steps | 475 |
+| mountaincar | **-102.0 +/- 8.8** | **-98.4 +/- 9.0** | **-101.8 +/- 8.7** | 4M decisions | -110 |
+| lunarlander | **274.5 +/- 18.6** | **286.2 +/- 29.1** | **282.5 +/- 19.6** | 16M steps | 200 |
+
+Wall clock for those runs: cartpole ~5 s (warp) / 24 s (jax) / 17 s (sb3);
+mountain car ~8 s / 63 s / 45 s; the lander ~60 s / 12 min / 3.5 min.
+
+The JAX and SB3 backends are reproducible run to run; the Warp one is not --
+its PPO loss is accumulated with `wp.atomic_add`, and float addition on the GPU
+is order-dependent, so the same seed lands within a band (a 65k-step cartpole
+run scored 251, 314, 327 and 337 across four repeats) rather than on a number.
+
+Throughput on this machine: Warp reaches 85k-170k env steps/s on cartpole,
+~290k on the lander and ~520k on mountain car, *including* the PPO update. SB3
+(torch on the CPU, driving our Warp environments) gets 29k / 75k / 89k, and its
+cost is the per-step host round-trip its `VecEnv` API requires. The JAX numbers
+come from a **CPU-only** jaxlib (no CUDA plugin installed here), so they measure
+a different machine class, not a different algorithm: ~21k steps/s on cartpole,
+~63k on mountain car and ~23k on the lander. Install `jax[cuda12]` and the same
+code runs on the GPU.
 
 ## Layout
 
-The split the code is organized around: everything environment-agnostic in
-`warp_rl/`, everything environment-specific in one module per environment under
-`warp_rl/envs/`.
-
-| file | contents |
-| --- | --- |
-| `warp_rl/vec_env.py` | `WarpVecEnv`: device buffers, RNG, episode bookkeeping, truncation, auto-reset, spaces, on-device stats |
-| `warp_rl/kernels.py` | shared kernels: sampling, rollout stores, GAE, advantage normalization, gathers, PPO loss/metrics |
-| `warp_rl/ppo.py` | `PPO` / `PPOConfig`: rollout, GAE, minibatch updates, CUDA-graph capture, evaluation |
-| `warp_rl/models.py` | warp-nn MLPs with orthogonal init, `ActorCritic`, save/load |
-| `warp_rl/render.py` | `TiledRenderer`: window or off-screen surface, N-environment grid, HUD, events |
-| `warp_rl/registry.py` | env id -> (env class, renderer class, recommended PPO settings) |
-| `warp_rl/envs/cartpole.py` | CartPole: params, kernels, `CartPoleVectorEnv`, `CartPoleRenderer` |
-| `warp_rl/envs/lunar_lander.py` | Lunar Lander: params, kernels, `LunarLanderVectorEnv`, `LunarLanderRenderer` |
-| `warp_rl/envs/mountain_car.py` | Mountain Car: params, kernels, `MountainCarVectorEnv`, `MountainCarRenderer` |
-| `train.py` / `play.py` | CLI entry points, both take `--env` |
-| `tests/` | Gymnasium parity (cartpole, mountain car), spec + physics checks (lander), PPO kernel checks |
-
-## The environment interface
-
-```python
-import warp_rl
-
-env = warp_rl.make("lunarlander", num_envs=1024, device="cuda:0")
-obs, info = env.reset(seed=0)                                  # obs: wp.array (N, obs_dim)
-obs, reward, terminated, truncated, info = env.step(actions)   # actions: int32 (N,)
+```
+rl_common/     shared: specs, config, registry, renderers, Gymnasium adapter,
+               training loop
+warp_rl/       backend: Warp kernels + warp-nn networks + tape-based PPO
+jax_rl/        backend: pure-function envs + Flax networks + jitted PPO
+sb3_rl/        backend: SB3's PPO on our envs through a VecEnv adapter
+train.py       --env {cartpole,lunarlander,mountaincar} --backend {warp,jax,sb3}
+play.py        same flags, plus recording and N-environment grids
+tests/         per-environment checks (all backends) + cross-backend parity
+tools/         Box2D cross-check for the lander, warp <-> jax weight conversion
 ```
 
-* Everything returned is a device-resident `wp.array` (`float32`; the flags are
-  0.0/1.0 so they feed the GAE kernel directly). The arrays are reused every
-  step -- copy what you want to keep.
-* Spaces are real `gymnasium.spaces` objects when Gymnasium is installed.
-* **Auto-reset is same-step** (the SB3/EnvPool convention, not Gymnasium 1.0's
-  next-step reset): a finished env is reset inside the same `step`, and
-  `info["final_observation"]` carries the true next state so truncated episodes
-  can still be bootstrapped.
-* `env.pop_episode_stats()` returns `(mean_return, mean_length, count)` for the
-  episodes finished since the previous call -- accumulated on the device, so one
-  3-float readback per iteration is the only host sync in the training loop.
+| shared (`rl_common/`) | |
+| --- | --- |
+| `specs/{cartpole,lunar_lander,mountain_car}.py` | every physical constant, the lander's rigid-body properties, the observation/shaping formulas |
+| `config.py` | `PPOConfig`, including learning-rate annealing |
+| `agent.py` / `trainer.py` | the two interfaces a backend implements: `Agent` (act / save / load) and `Trainer` (which supplies `train`, `evaluate` and environment construction, leaving only `iterate` to the backend) |
+| `registry.py` | env id -> shape, recommended PPO settings, renderer, and the class each backend implements it with (imported lazily, so using JAX never imports Warp) |
+| `cli.py` | the flags `train.py` and `play.py` share, and `PPOConfig` from them |
+| `render/` | `TiledRenderer` plus one renderer per environment -- they only ever see numpy, via each env's `render_state()` |
+| `gym_api.py` | `GymEnv`: any of our environments as a standard `gymnasium.Env`, and `register()` to publish them as `WarpCartPole-v0`, `JaxLunarLander-v0`, ... |
+| `training.py` | the iteration loop (annealing, timing, logging), greedy evaluation |
+| `arrays.py` | `to_numpy` for Warp or JAX arrays |
+
+| warp backend (`warp_rl/`) | | jax backend (`jax_rl/`) | |
+| --- | --- | --- | --- |
+| `vec_env.py` | `WarpVecEnv`: device buffers, RNG, bookkeeping kernels | `vec_env.py` | `vec_reset`/`vec_step` (pure, vmapped, jittable) + `JaxVecEnv` shell |
+| `envs/*.py` | physics as `@wp.kernel` | `envs/*.py` | physics as pure single-env functions |
+| `agent.py` | warp-nn MLPs, orthogonal init | `agent.py` | Flax MLPs, same architecture and init |
+| `kernels.py` | sampling, GAE, gathers, PPO loss | `ppo.py` | the same maths in jitted `lax.scan`s |
+| `ppo.py` | `wp.Tape` gradients, CUDA-graph capture | `ppo.py` | one jitted iteration, optax Adam |
+
+Each backend's `ppo.py` implements exactly one method -- `iterate(lr)`, one
+rollout plus one update -- and inherits the loop, the annealing, the logging
+and the evaluation from `rl_common.Trainer`; each `agent.py` implements `act`,
+`save` and `load` and inherits `act_numpy` from `rl_common.Agent`.
+
+The third backend is deliberately thin -- it contributes no environments and no
+learner, only adapters: `sb3_rl/vec_env.py` presents our vectorized environments
+as an SB3 `VecEnv` (one batched step, one host copy, no per-environment Python
+loop), `sb3_rl/agent.py` puts an SB3 policy behind the same `act`/`save`/`load`
+interface as the others, and `sb3_rl/ppo.py` drives `stable_baselines3.PPO` one
+iteration at a time from the *shared* training loop.
+
+Roughly 1200 lines of shared code, 1850 of Warp, 1050 of JAX, 400 of SB3 glue,
+and 1300 of tests.
+
+## What is shared, and what is not
+
+The two backends are the same *specification* computed two different ways, so
+the split follows that line:
+
+* **Shared, because it is the definition of the problem**: constants, the
+  observation and reward formulas, the terrain layout, the recommended
+  hyperparameters, the solved thresholds, the time limits.
+* **Shared, because it is host-side plumbing**: the registry, the renderers
+  (they take numpy from `render_state()`), the training loop with its
+  annealing/logging, greedy evaluation, and the CLIs.
+* **Written twice, because the compute model differs**: the physics (Warp
+  kernels mutating device arrays vs. pure functions that JAX vmaps), the
+  networks, and PPO itself (a `wp.Tape` with CUDA-graph capture vs. a jitted
+  `lax.scan` with optax).
+* **Adapted, not rewritten**: SB3 brings its own PPO, so that backend only
+  translates -- our environments into a `VecEnv`, its policy into our agent
+  interface -- and reuses the shared loop for annealing, logging and evaluation.
+
+Both backends expose the same Python API -- `reset` / `step` /
+`pop_episode_stats` / `render_state`, and an agent with `act` / `save` / `load`
+-- which is what lets `play.py`, the renderers and the evaluation helper be
+written once.
 
 ### Adding an environment
 
-Subclass `WarpVecEnv`, declare `obs_dim` / `num_actions`, and write two hooks:
+Add its constants to `rl_common/specs/`, write a `WarpVecEnv` subclass (two
+hooks: `_reset`, `_step`) and/or a functional JAX env (`reset(key)`,
+`step(key, state, action)`), add a `TiledRenderer` subclass, then one `EnvSpec`
+entry in `rl_common/registry.py`. `--env myenv --backend either` then works
+everywhere.
+
+## Keeping the two implementations honest
+
+`tests/test_backend_parity.py` pins the backends to each other rather than
+trusting that they agree:
+
+```
+cartpole: one-step dynamics identical across backends (max |diff| = 9.54e-07)
+mountaincar: one-step dynamics identical across backends (max |diff| = 5.96e-08)
+lunarlander one-step dynamics: max |warp - jax| = 1.02e-06 over 50 random states
+lunarlander unpowered descent: max |obs diff| = 2.23e-04 over 200 steps
+mountaincar with action_repeat=8: warp and jax agree over 25 decisions
+networks agree given identical weights (logits 3.03e-09, values 3.58e-07)
+GAE agrees across backends (advantages 1.91e-06, returns 1.91e-06)
+both backends learn cartpole: warp 21 -> 126, jax 21 -> 122
+```
+
+The network test copies the Warp weights into the Flax parameter tree and
+checks both produce the same logits and values; the GAE test runs the Warp
+kernel and the JAX scan on the same synthetic rollout. On top of that, every
+environment's own test file runs against **both** backends: CartPole and
+Mountain Car are compared step-for-step against Gymnasium (exact to float32),
+and the lander's spec tests plus Gymnasium's heuristic controller run on each.
+
+Checkpoints are portable in the same spirit -- the two backends only differ by a
+name and a transpose:
+
+```
+python tools/convert_weights.py --env lunarlander --from warp --to jax \
+    weights/lunarlander.npz weights/jax/lunarlander.npz
+```
+
+The Warp-trained lander, converted to Flax and evaluated in the *JAX*
+environment, scores 281.9 +/- 17.6 -- the same policy in the same task, with
+every line of physics and inference underneath it replaced.
+
+## The environments
+
+**CartPole** -- a line-by-line port of `CartPole-v1` (`euler` integrator).
+Both backends agree with Gymnasium to `2.4e-07` over 200 steps and terminate on
+exactly the same step.
+
+**Mountain Car** -- a line-by-line port of `MountainCar-v0` (exact to `6e-08`),
+plus one addition: `action_repeat`. The reward is `-1` per step and nothing
+else, so with uniformly random actions the flag is unreachable -- **0 of 4096
+episodes** -- and PPO has no signal at all. Holding each action for 8 physics
+steps makes random exploration resonate up the hill (55 of 4096), which is the
+difference between unlearnable and solved in 8 seconds. Rewards still count
+physics steps, so returns stay comparable to `MountainCar-v0`, and
+`action_repeat=1` is the untouched environment.
+
+**Lunar Lander** -- Gymnasium's task definition (terrain with its `0.33`
+smoothing quirk, the 8-dim observation, the shaping reward and fuel costs, the
+engine impulses with their dispersion, `+/-100` terminals) on a rigid-body
+solver of our own instead of Box2D: hull plus welded legs with the mass, centre
+of mass and inertia computed from Box2D's own polygons and densities (4.96 kg,
+0.92 kg m^2), 8 substeps, penalty leg contacts with friction, and a 4 m/s
+impact-crash rule standing in for legs that would snap. All deviations are
+listed at the top of `rl_common/specs/lunar_lander.py`.
+
+Validation: Gymnasium's own `demo_heuristic_lander`, unmodified, scores **249.8
+(warp) / 253.2 (jax)** here and lands ~119 of 128 times;
+`tools/crosscheck_box2d.py` runs it in both worlds and gets 242.3 here vs 243.8
+in real Box2D. A *learned* policy transfers poorly back to Box2D -- 44.5 for the Warp-trained
+one, 51.1 for the JAX-trained one, neither landing cleanly. Both learn to land
+the way our compliant legs reward, and they fail the same way, which is itself
+evidence the two backends model the same world. Train against the physics you
+intend to fly.
+
+## Gymnasium and Stable-Baselines3
+
+The third backend exists to answer a different question from the first two: not
+"how fast can this be" but "does the rest of the ecosystem accept it".
+
+`rl_common.gym_api.GymEnv` presents any of our environments -- on either
+compute backend -- as an ordinary `gymnasium.Env`, and `register()` publishes
+them under `WarpCartPole-v0`, `JaxLunarLander-v0` and so on:
 
 ```python
-class MyEnv(WarpVecEnv):
-    obs_dim, num_actions = 5, 3
+import gymnasium as gym
+from rl_common.gym_api import register
 
-    def _reset(self):   # re-initialize every env whose needs_reset flag is set,
-        ...             # and write its first observation into self.obs
-
-    def _step(self, actions):   # advance the physics; write self.final_obs,
-        ...                     # self.rewards and self.terminated
+register()
+env = gym.make("WarpLunarLander-v0")     # our Warp physics, standard API
 ```
 
-The base class owns the rest: return/length accumulation, the time limit,
-auto-reset masking, episode statistics and the Gymnasium-facing API. Add a
-`TiledRenderer` subclass with `fetch()` + `draw_tile()` for visuals, then one
-`EnvSpec` entry in `warp_rl/registry.py` with the recommended PPO settings, and
-`--env myenv` works everywhere.
+All six pass `stable_baselines3.common.env_checker.check_env`, and a test steps
+the adapter and the vectorized environment side by side to confirm the single-env
+view is the same environment.
 
-## CartPole
+For training, `sb3_rl.vec_env.VecEnvAdapter` skips the single-env detour and
+hands SB3 the whole batch at once, translating our same-step auto-reset into
+SB3's `terminal_observation` / `TimeLimit.truncated` convention. `--backend sb3`
+then trains with SB3's PPO on our environments, and `--env-backend gym` swaps in
+stock Gymnasium environments for a same-learner reference run.
 
-A line-by-line port of Gymnasium's `CartPoleEnv` (`euler` integrator), so
-trajectories agree to float32 rounding (`max |warp - gymnasium| = 2.4e-07` over
-200 steps) and episodes terminate on exactly the same step --
-`tests/test_cartpole_env.py` checks both, and
-`train.py --env cartpole --gym-eval 10` plays the trained policy in the real
-Gymnasium environment (500.0).
-
-## Lunar Lander
-
-Everything the *agent* sees is ported from `gymnasium/envs/box2d/lunar_lander.py`
-(LunarLander-v3, discrete): the 11-chunk random terrain with its flat helipad
-(including Gymnasium's `0.33`-weighted smoothing quirk, which puts the pad at
-`0.99 * H/4`), the 8-dim observation, the shaping reward with its 0.3/0.03 fuel
-costs, the +/-100 terminal rewards, the engine impulses with their random
-dispersion, and the four discrete actions.
-
-The *dynamics* are not Box2D -- there is no constraint solver here. The lander
-is a single rigid body (hull + welded legs) whose mass, centre of mass and
-moment of inertia are computed from the very same polygons and densities Box2D
-is given (4.96 kg, 0.92 kg m^2), integrated semi-implicitly with 8 substeps, and
-it touches the ground through two leg contact points resolved with a penalty
-spring-damper plus Coulomb friction. Deviations, all documented at the top of
-`warp_rl/envs/lunar_lander.py`:
-
-* rigid legs instead of sprung revolute joints, and compliant contacts
-  (millimetres of penetration under weight) instead of hard constraints;
-* friction 0.5 rather than Box2D's slippery 0.1;
-* touching down faster than `CRASH_SPEED = 4 m/s` counts as a crash -- our
-  springy legs would otherwise absorb an unsurvivable slam that Box2D would
-  turn into a hull impact;
-* "came to rest" (velocities below threshold for half a second with no engine
-  firing) replaces Box2D's sleep test for the +100 landing bonus;
-* `reset()` skips Gymnasium's extra zero-action step; no wind, no continuous
-  actions.
-
-**How it is validated.** Parity with Box2D trajectories is impossible by
-construction, so `tests/test_lunar_lander.py` pins down the specification
-instead -- the observation vector against the Gymnasium formula (exact), the
-reward against the shaping-delta formula over thousands of transitions, the
-terrain layout, free-fall gravity, main-engine delta-v, and the crash /
-out-of-bounds rules -- and then validates the dynamics end-to-end by flying
-**Gymnasium's own `demo_heuristic_lander` controller**, unmodified: it scores
-249.8 and lands 119/128 times here.
-
-`tools/crosscheck_box2d.py` takes that further and runs the same controller in
-both worlds, plus a Warp-trained policy in Box2D (needs `gymnasium[box2d]`):
-
-```
-                                        mean     std  landed
-gymnasium heuristic in warp            242.3   138.3  29/32
-gymnasium heuristic in box2d           243.8    99.2  29/32
-warp-trained policy in box2d            44.5    16.1   0/32
-```
-
-The reference controller scores the same in both environments, which is the
-result that matters: as a control problem this is LunarLander. A *learned*
-policy is another story -- it transfers poorly (44.5 in Box2D against 274 at
-home, no clean landings), and the sharper it gets here the worse it transfers,
-because it lands the way our compliant legs reward and Box2D's articulated ones
-behave differently on touchdown. Train against the physics you intend to fly.
-
-## Mountain Car
-
-Another line-by-line port of a classic-control environment, so parity with
-`MountainCar-v0` is exact again (`max |warp - gymnasium| = 6e-08` over 200
-steps, and the same 200-step truncation).
-
-What makes it interesting is that the reward is `-1` per step until the flag,
-and **nothing else** -- so an untrained policy gets no gradient signal at all
-unless it stumbles onto the goal, and a uniformly random policy never does:
-**0 of 4096 episodes** reach the flag, at any horizon we tried. The env
-therefore takes one addition, `action_repeat`: the agent decides every *k*
-physics steps and the action is held in between. Random *held* actions resonate
-up the hill, which is the whole difference:
-
-| action_repeat | random episodes reaching the flag |
-| --- | --- |
-| 1 (= MountainCar-v0) | 0 / 4096 |
-| 4 | 0 / 4096 |
-| 8 (trained on) | 55 / 4096 |
-| 16 | 354 / 4096 |
-
-Rewards still count physics steps, and `max_episode_steps` counts decisions, so
-the registry's `25 decisions x repeat 8` is exactly MountainCar-v0's 200-step
-limit and the returns are directly comparable. `action_repeat=1` (the default)
-is the untouched environment; `tests/test_mountain_car.py` checks that one
-repeat-8 step equals eight single steps in state, reward and termination.
-
-PPO solves it in ~8 s (greedy return -102.0, threshold -110), and the same
-policy scores **-100.0 in the real Gymnasium `MountainCar-v0`**
-(`train.py --env mountaincar --gym-eval 20`) -- unsurprising, since the physics
-is the same code.
-
-![four mountain cars swinging up](media/mountaincar_grid.gif)
+**One finding worth recording.** With identical hyperparameters, SB3 initially
+failed on mountain car -- `-200.0`, never reaching the flag, while our two
+backends solved it. It was not the adapter: SB3 driving its own `learn()` loop
+failed the same way, and so did SB3 on *stock* `MountainCar-v0`, so the failure
+followed the learner rather than the environment. The cause turned out to be
+Adam's epsilon: SB3 defaults to `1e-5` (inherited from OpenAI baselines) where
+warp-nn and optax use `1e-8`. On a task whose gradients are rare and tiny, that
+epsilon swamps the update -- with `eps=1e-8` SB3 solves mountain car at
+`-101.8`, matching the others. The backend now sets it explicitly, and the
+episode is a decent argument for keeping three implementations around.
 
 ## Watching it play
 
-`play.py` drives any registered environment (ESC or closing the window quits):
-
 ```
 python play.py --env lunarlander --weights weights/lunarlander.npz
-python play.py --env mountaincar --weights weights/mountaincar.npz
-python play.py --env lunarlander --num-render 9 --tile 400 280      # nine landers at once
-python play.py --env cartpole --gif media/cartpole.gif              # record instead of display
-python play.py --env lunarlander --random --stochastic              # an untrained policy
+python play.py --env lunarlander --num-render 9 --tile 400 280    # nine landers at once
+python play.py --env mountaincar --backend jax --weights weights/jax/mountaincar.npz
+python play.py --env cartpole --gif media/cartpole.gif            # record instead of display
+python play.py --env lunarlander --random --stochastic            # an untrained policy
 ```
 
-With no `--weights` it trains first and then plays. Recording works headless
+The renderer is shared, so the same pictures come out of either backend. With
+no `--weights` it trains first and then plays. Recording works headless
 (`SDL_VIDEODRIVER=dummy`), and `--gif out.mp4` writes video instead of a GIF.
 
 ![nine landers descending onto their own random terrain](media/lunarlander_grid.gif)
 
-## The training loop
+## The algorithm
 
-Standard PPO (CleanRL-shaped), with every per-sample operation as a Warp kernel:
+Standard PPO, identical on both sides: rollout with a categorical policy,
+values for the observation *and* the pre-auto-reset next observation, GAE that
+bootstraps through truncation but not termination, batch-normalized advantages,
+then `update_epochs` passes over shuffled minibatches minimizing the clipped
+surrogate plus `0.5 * value MSE - entropy bonus`, with global-norm gradient
+clipping and a linearly annealed learning rate.
 
-1. **Rollout** -- policy forward, categorical sampling (inverse-CDF from a
-   log-softmax with a per-env RNG state), env step, stores into `(T*N, ...)`
-   buffers. Captured as one CUDA graph.
-2. **Values and GAE** -- one batched value pass over the observation buffer and
-   one over the pre-auto-reset next observations, then `gae_kernel` (one thread
-   per env, walking time backwards). Bootstrapping uses
-   `V(s') * (1 - terminated)`, so truncated episodes bootstrap and terminated
-   ones do not. Advantages are normalized over the batch with a two-moment
-   reduction kernel.
-3. **Update** -- `update_epochs` passes over a shuffled batch. Per minibatch:
-   gather kernels build the minibatch, the tape records the policy and value
-   forwards plus `ppo_loss` (clipped surrogate + 0.5*value MSE - entropy bonus,
-   summed with `wp.atomic_add`), `tape.backward()` fills the gradients, warp-nn's
-   `Adam` (global-norm clipping) steps, gradients are cleared. A whole epoch is
-   captured as one CUDA graph.
+Where they differ is the machinery:
 
-Two implementation notes worth knowing if you build on this:
-
-* **warp-nn caches one output array per (shape, dtype)**, so two calls of the
-  same module with the same input shape share a buffer. `compute_advantages`
-  copies the first value pass out before running the second.
-* **`array.zero_()` costs a fixed ~130 us per call** on this driver, which at 23
-  gradient arrays x 80 minibatches per iteration was 90% of the training time.
-  The trainer zeroes gradients with a one-line Warp kernel instead
-  (`kernels.zero_kernel`), ~30x faster, which cut the cartpole iteration from
-  256 ms to 96 ms. That is also why `Adam` is constructed with
-  `disable_graph=True`: the trainer captures whole epochs itself, and CUDA graph
-  captures cannot nest.
+* **Warp** -- every per-sample operation is a kernel; the rollout and each
+  update epoch are captured as single CUDA graphs; gradients come from
+  `wp.Tape`. Two things worth knowing if you build on it: warp-nn caches one
+  output array per `(shape, dtype)`, so two same-shape calls share a buffer
+  (`compute_advantages` copies out before the second value pass); and
+  `array.zero_()` costs a fixed ~130 us per call on this driver, which made
+  gradient zeroing 90% of the training time until it was replaced by a one-line
+  kernel (256 ms -> 96 ms per cartpole iteration).
+* **JAX** -- the environment is pure functions that `vec_step` vmaps, so a whole
+  iteration (rollout `scan`, reverse-`scan` GAE, epoch-of-minibatches `scan`) is
+  one jitted function; only the metrics come back to the host. The annealed
+  learning rate is pushed into `optax.inject_hyperparams(optax.adam)` so the
+  shared loop drives both backends the same way.
 
 ## Hyperparameters
 
-Each environment's recommended settings live in its `EnvSpec` in
-`warp_rl/registry.py`; every one has a CLI flag that overrides it.
+Per environment, in `rl_common/registry.py`; every one has a CLI flag.
 
 | | cartpole | lunarlander | mountaincar |
 | --- | --- | --- | --- |
@@ -267,20 +300,23 @@ decisions is 32M physics steps.
 ## Using it as a library
 
 ```python
-import warp_rl
+import rl_common
 
-cfg = warp_rl.default_config("lunarlander", seed=0)      # recommended settings
-trainer = warp_rl.PPO(cfg)
+cfg = rl_common.default_config("lunarlander", backend="jax", seed=0)
+trainer = rl_common.make_trainer(cfg)
 trainer.train(callback=lambda s: print(s["global_step"], s["episodic_return"]))
 print(trainer.evaluate(num_envs=128))
-trainer.agent.save("weights/lunarlander.npz")
-```
+trainer.agent.save("weights/jax/lunarlander.npz")
 
-`--device cpu` works too (same kernels, far slower); `--no-graph` disables graph
-capture, which is useful when debugging a kernel.
+env = rl_common.make("cartpole", 1024, backend="warp", device="cuda:0")
+obs, info = env.reset(seed=0)
+obs, reward, terminated, truncated, info = env.step(actions)
+```
 
 ## Requirements
 
-`warp-lang`, `warp-nn`, `numpy`. Optional: `gymnasium` (space objects, the
-cartpole parity tests, `--gym-eval`), `pygame` (rendering) and `imageio`
-(recording).
+`numpy`, plus at least one backend: `warp-lang` + `warp-nn`, `jax` + `flax` +
+`optax`, or `stable-baselines3` + `torch` (which also needs one of the first two
+for its environments). Optional: `gymnasium` (space objects, the Gymnasium
+adapter, the parity tests, `--gym-eval`), `pygame` (rendering), `imageio`
+(recording), `gymnasium[box2d]` (the lander cross-check).

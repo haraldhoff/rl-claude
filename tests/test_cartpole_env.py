@@ -1,6 +1,8 @@
-"""Check the Warp CartPole against Gymnasium's CartPole-v1.
+"""Check the CartPole implementations against Gymnasium's CartPole-v1.
 
-Run with pytest, or directly:  python tests/test_env_parity.py
+Both backends are pure ports, so parity is exact up to float32 rounding.
+
+Run with pytest, or directly:  python tests/test_cartpole_env.py
 """
 
 from __future__ import annotations
@@ -9,153 +11,146 @@ import os
 import sys
 
 import numpy as np
-import warp as wp
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import gymnasium as gym  # noqa: E402
 
-from warp_rl.envs.cartpole import CartPoleVectorEnv  # noqa: E402
+import rl_common  # noqa: E402
 
+BACKENDS = ["warp", "jax"]
 NUM_ENVS = 16
 STEPS = 200
 
 
-def _gym_envs(n: int, seed: int = 0, max_episode_steps: int = 500):
+def _gym_envs(n: int, seed: int = 0):
     envs, states = [], []
     for i in range(n):
-        env = gym.make("CartPole-v1", max_episode_steps=max_episode_steps).unwrapped
+        env = gym.make("CartPole-v1").unwrapped
         obs, _ = env.reset(seed=seed + i)
         envs.append(env)
         states.append(obs)
     return envs, np.asarray(states, dtype=np.float32)
 
 
-def test_single_step_dynamics_match():
-    """Re-sync the Warp state each step so only one-step dynamics are compared."""
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_single_step_dynamics_match(backend):
+    """Re-sync the state each step so only one-step dynamics are compared."""
     rng = np.random.default_rng(0)
     envs, states = _gym_envs(NUM_ENVS)
-    warp_env = CartPoleVectorEnv(NUM_ENVS, autoreset=False)
-    warp_env.reset(seed=0)
+    env = rl_common.make("cartpole", NUM_ENVS, backend=backend, autoreset=False)
+    env.reset(seed=0)
 
     max_diff = 0.0
     for _ in range(STEPS):
-        warp_env.set_state(states)
+        env.set_state(states)
         actions = rng.integers(0, 2, size=NUM_ENVS).astype(np.int32)
 
-        _, w_rew, w_term, _, w_info = warp_env.step(actions)
-        warp_next = w_info["final_observation"].numpy()
-        warp_term = w_term.numpy()
-        warp_rew = w_rew.numpy()
+        _, reward, terminated, _, info = env.step(actions)
+        next_obs = rl_common.to_numpy(info["final_observation"])
+        terminated = rl_common.to_numpy(terminated)
+        reward = rl_common.to_numpy(reward)
 
         next_states, terms = [], []
-        for i, env in enumerate(envs):
-            obs, reward, terminated, _, _ = env.step(int(actions[i]))
-            assert reward == warp_rew[i]
+        for i, gym_env in enumerate(envs):
+            obs, gym_reward, gym_terminated, _, _ = gym_env.step(int(actions[i]))
+            assert gym_reward == reward[i]
             next_states.append(obs)
-            terms.append(float(terminated))
-            if terminated:
-                obs, _ = env.reset()
+            terms.append(float(gym_terminated))
+            if gym_terminated:
+                obs, _ = gym_env.reset()
                 next_states[-1] = obs
         next_states = np.asarray(next_states, dtype=np.float32)
 
-        # compare before any reset happened on either side
         live = np.asarray(terms) == 0.0
-        assert np.array_equal(np.asarray(terms), warp_term), "termination flags differ"
-        diff = np.abs(next_states[live] - warp_next[live]).max(initial=0.0)
-        max_diff = max(max_diff, float(diff))
+        assert np.array_equal(np.asarray(terms), terminated), "termination flags differ"
+        max_diff = max(max_diff, float(np.abs(next_states[live] - next_obs[live]).max(initial=0.0)))
         states = next_states
 
     assert max_diff < 1e-5, f"one-step dynamics differ by {max_diff}"
-    print(f"one-step dynamics: max |warp - gymnasium| = {max_diff:.3e} over {STEPS} steps")
+    print(f"[{backend}] one-step dynamics: max |backend - gymnasium| = {max_diff:.3e} over {STEPS} steps")
 
 
-def test_full_episode_matches():
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_full_episode_matches(backend):
     """Free-running episodes: same actions, same length, same trajectory."""
     rng = np.random.default_rng(1)
     envs, states = _gym_envs(NUM_ENVS, seed=100)
-    warp_env = CartPoleVectorEnv(NUM_ENVS, autoreset=False)
-    warp_env.reset(seed=0)
-    warp_env.set_state(states)
+    env = rl_common.make("cartpole", NUM_ENVS, backend=backend, autoreset=False)
+    env.reset(seed=0)
+    env.set_state(states)
 
     alive = np.ones(NUM_ENVS, dtype=bool)
     gym_len = np.zeros(NUM_ENVS, dtype=np.int64)
-    warp_len = np.zeros(NUM_ENVS, dtype=np.int64)
+    backend_len = np.zeros(NUM_ENVS, dtype=np.int64)
     max_diff = 0.0
 
     for _ in range(500):
         actions = rng.integers(0, 2, size=NUM_ENVS).astype(np.int32)
-        _, _, w_term, _, w_info = warp_env.step(actions)
-        warp_next = w_info["final_observation"].numpy()
-        w_done = w_term.numpy() > 0
+        _, _, terminated, _, info = env.step(actions)
+        next_obs = rl_common.to_numpy(info["final_observation"])
+        done = rl_common.to_numpy(terminated) > 0
 
-        g_next, g_done = [], []
-        for i, env in enumerate(envs):
+        gym_next, gym_done = [], []
+        for i, gym_env in enumerate(envs):
             if not alive[i]:  # Gymnasium warns if you step a finished episode
-                g_next.append(np.zeros(4, dtype=np.float32))
-                g_done.append(True)
+                gym_next.append(np.zeros(4, dtype=np.float32))
+                gym_done.append(True)
                 continue
-            obs, _, terminated, _, _ = env.step(int(actions[i]))
-            g_next.append(obs)
-            g_done.append(terminated)
-        g_next = np.asarray(g_next, dtype=np.float32)
-        g_done = np.asarray(g_done)
+            obs, _, terminated_i, _, _ = gym_env.step(int(actions[i]))
+            gym_next.append(obs)
+            gym_done.append(terminated_i)
+        gym_next = np.asarray(gym_next, dtype=np.float32)
+        gym_done = np.asarray(gym_done)
 
-        max_diff = max(max_diff, float(np.abs(g_next[alive] - warp_next[alive]).max(initial=0.0)))
-        gym_len += alive & ~g_done
-        warp_len += alive & ~w_done
-        alive &= ~(g_done | w_done)
+        max_diff = max(max_diff, float(np.abs(gym_next[alive] - next_obs[alive]).max(initial=0.0)))
+        gym_len += alive & ~gym_done
+        backend_len += alive & ~done
+        alive &= ~(gym_done | done)
         if not alive.any():
             break
 
-    assert np.array_equal(gym_len, warp_len), f"episode lengths differ: {gym_len} vs {warp_len}"
+    assert np.array_equal(gym_len, backend_len), f"episode lengths differ: {gym_len} vs {backend_len}"
     assert max_diff < 1e-3, f"trajectories drifted by {max_diff}"
-    print(f"free-running episodes: lengths identical, max drift {max_diff:.3e}, mean length {gym_len.mean():.1f}")
+    print(f"[{backend}] free-running episodes: lengths identical, max drift {max_diff:.3e}")
 
 
-def test_truncation_at_max_episode_steps():
-    env = CartPoleVectorEnv(4, max_episode_steps=10, autoreset=True)
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_truncation_and_autoreset(backend):
+    env = rl_common.make("cartpole", 4, backend=backend, max_episode_steps=10, autoreset=True)
     env.reset(seed=3)
-    actions = np.zeros(4, dtype=np.int32)  # push left forever -> pole falls first
-    truncs = []
-    for _ in range(10):
-        _, _, term, trunc, _ = env.step(actions)
-        truncs.append((term.numpy().copy(), trunc.numpy().copy()))
-    # with alternating actions the pole survives 10 steps and must truncate
-    env2 = CartPoleVectorEnv(4, max_episode_steps=10, autoreset=True)
-    env2.reset(seed=3)
-    for t in range(10):
-        acts = np.full(4, t % 2, dtype=np.int32)
-        _, _, term, trunc, _ = env2.step(acts)
-    assert np.all(trunc.numpy() == 1.0), "expected truncation at max_episode_steps"
-    assert np.all(term.numpy() == 0.0)
-    assert np.all(env2.steps.numpy() == 0), "auto-reset must clear the step counter"
-    print("truncation and auto-reset behave as expected")
+    for t in range(10):  # alternating pushes keep the pole up for 10 steps
+        _, _, terminated, truncated, _ = env.step(np.full(4, t % 2, dtype=np.int32))
+    assert np.all(rl_common.to_numpy(truncated) == 1.0), "expected truncation at max_episode_steps"
+    assert np.all(rl_common.to_numpy(terminated) == 0.0)
+    assert np.all(env.render_state()["steps"] == 0), "auto-reset must clear the step counter"
+    print(f"[{backend}] truncation and auto-reset behave as expected")
 
 
-def test_autoreset_starts_new_episode():
-    env = CartPoleVectorEnv(64, max_episode_steps=500, autoreset=True)
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_autoreset_starts_new_episode(backend):
+    env = rl_common.make("cartpole", 64, backend=backend, autoreset=True)
     env.reset(seed=7)
     rng = np.random.default_rng(0)
     finished = 0
     for _ in range(400):
-        acts = rng.integers(0, 2, size=64).astype(np.int32)
-        obs, _, term, trunc, info = env.step(acts)
-        done = (term.numpy() + trunc.numpy()) > 0
+        obs, _, terminated, truncated, _ = env.step(rng.integers(0, 2, size=64).astype(np.int32))
+        done = (rl_common.to_numpy(terminated) + rl_common.to_numpy(truncated)) > 0
         if done.any():
             finished += int(done.sum())
-            fresh = obs.numpy()[done]
+            fresh = rl_common.to_numpy(obs)[done]
             assert np.abs(fresh).max() <= 0.05, "auto-reset must draw a fresh U(-0.05, 0.05) state"
-    mean_ret, mean_len, count = env.pop_episode_stats()
+    mean_return, mean_length, count = env.pop_episode_stats()
     assert count == finished
-    assert 5.0 < mean_len < 100.0, f"random policy episode length looks wrong: {mean_len}"
-    print(f"auto-reset: {count} episodes, mean length {mean_len:.1f} (random policy)")
+    assert 5.0 < mean_length < 100.0, f"random policy episode length looks wrong: {mean_length}"
+    print(f"[{backend}] auto-reset: {count} episodes, mean length {mean_length:.1f} (random policy)")
 
 
 if __name__ == "__main__":
-    wp.init()
-    test_single_step_dynamics_match()
-    test_full_episode_matches()
-    test_truncation_at_max_episode_steps()
-    test_autoreset_starts_new_episode()
-    print("all environment parity checks passed")
+    for backend in BACKENDS:
+        test_single_step_dynamics_match(backend)
+        test_full_episode_matches(backend)
+        test_truncation_and_autoreset(backend)
+        test_autoreset_starts_new_episode(backend)
+    print("all cartpole checks passed")

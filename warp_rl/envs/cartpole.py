@@ -2,23 +2,18 @@
 
 Physics and constants are a faithful port of ``gymnasium/envs/classic_control/
 cartpole.py`` (``euler`` integrator), so a Warp env stepped with the same
-actions from the same state reproduces Gymnasium up to float32 rounding.
+actions from the same state reproduces Gymnasium up to float32 rounding.  The
+constants live in :mod:`rl_common.specs.cartpole`, shared with the JAX backend.
 """
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import warp as wp
 
-from ..render import TiledRenderer
+from rl_common.specs import cartpole as spec
+
 from ..vec_env import WarpVecEnv
-
-
-# ---------------------------------------------------------------------------
-# parameters
-# ---------------------------------------------------------------------------
 
 
 @wp.struct
@@ -40,17 +35,17 @@ class CartPoleParams:
 
 def default_params() -> CartPoleParams:
     p = CartPoleParams()
-    p.gravity = 9.8
-    p.masscart = 1.0
-    p.masspole = 0.1
-    p.total_mass = p.masscart + p.masspole
-    p.length = 0.5
-    p.polemass_length = p.masspole * p.length
-    p.force_mag = 10.0
-    p.tau = 0.02
-    p.theta_threshold = 12.0 * 2.0 * np.pi / 360.0
-    p.x_threshold = 2.4
-    p.reset_bound = 0.05
+    p.gravity = spec.GRAVITY
+    p.masscart = spec.MASSCART
+    p.masspole = spec.MASSPOLE
+    p.total_mass = spec.TOTAL_MASS
+    p.length = spec.LENGTH
+    p.polemass_length = spec.POLEMASS_LENGTH
+    p.force_mag = spec.FORCE_MAG
+    p.tau = spec.TAU
+    p.theta_threshold = spec.THETA_THRESHOLD
+    p.x_threshold = spec.X_THRESHOLD
+    p.reset_bound = spec.RESET_BOUND
     return p
 
 
@@ -139,18 +134,15 @@ class CartPoleVectorEnv(WarpVecEnv):
     """``num_envs`` independent CartPole-v1 environments stepped in lockstep."""
 
     env_id = "cartpole"
-    obs_dim = 4
-    num_actions = 2
+    obs_dim = spec.OBS_DIM
+    num_actions = spec.NUM_ACTIONS
 
-    def __init__(self, num_envs: int = 1, *, max_episode_steps: int = 500, **kwargs):
+    def __init__(self, num_envs: int = 1, *, max_episode_steps: int = spec.MAX_EPISODE_STEPS, **kwargs):
         self.params = default_params()
         super().__init__(num_envs, max_episode_steps=max_episode_steps, **kwargs)
 
     def observation_high(self) -> np.ndarray:
-        return np.array(
-            [self.params.x_threshold * 2.0, np.inf, self.params.theta_threshold * 2.0, np.inf],
-            dtype=np.float32,
-        )
+        return np.array([spec.X_THRESHOLD * 2.0, np.inf, spec.THETA_THRESHOLD * 2.0, np.inf], dtype=np.float32)
 
     def _reset(self) -> None:
         wp.launch(
@@ -183,77 +175,3 @@ class CartPoleVectorEnv(WarpVecEnv):
         self.steps.zero_()
         self.ep_return.zero_()
         self.ep_length.zero_()
-
-
-# ---------------------------------------------------------------------------
-# renderer
-# ---------------------------------------------------------------------------
-
-_CART_W, _CART_H = 50.0, 30.0
-_POLE_W = 10.0
-_CART_Y = 300.0  # cart centre line, measured from the top of a 400px tile
-
-_CART = (0, 0, 0)
-_POLE = (202, 152, 101)
-_AXLE = (129, 132, 203)
-_TRACK = (0, 0, 0)
-_LIMIT = (220, 90, 90)
-
-
-class CartPoleRenderer(TiledRenderer):
-    """The classic-control cart-pole picture, drawn from the device state."""
-
-    def setup(self) -> None:
-        import pygame  # noqa: F401  (imported by the base, kept local for clarity)
-
-        env = self.env
-        # a little margin beyond +/- x_threshold so the limit markers are visible
-        self.scale = self.tile_w / (env.params.x_threshold * 2.0 * 1.15)
-        self.pole_len = self.scale * (2.0 * env.params.length)
-        self.cart_y = _CART_Y * (self.tile_h / 400.0)
-
-    def stats_label(self, index: int) -> str:
-        x, _, theta, _ = self.states[index]
-        return (
-            f"env {index}  t={int(self.steps[index]):3d}  R={self.returns[index]:.0f}  "
-            f"x={x:+.2f}  th={math.degrees(theta):+5.1f}"
-        )
-
-    def draw_tile(self, origin: tuple[float, float], index: int) -> None:
-        import pygame
-
-        ox, oy = origin
-        surf = self.surface
-        x, _, theta, _ = (float(v) for v in self.states[index])
-
-        cart_x = ox + self.tile_w / 2.0 + x * self.scale
-        cart_y = oy + self.cart_y
-        cart_w, cart_h = _CART_W * self.k, _CART_H * self.k
-        pole_w = max(2.0, _POLE_W * self.k)
-
-        # track and the +/- x_threshold limits that end an episode
-        pygame.draw.line(surf, _TRACK, (ox, cart_y), (ox + self.tile_w, cart_y), max(1, int(2 * self.k)))
-        for sign in (-1.0, 1.0):
-            lx = ox + self.tile_w / 2.0 + sign * self.env.params.x_threshold * self.scale
-            pygame.draw.line(
-                surf, _LIMIT, (lx, cart_y - 20 * self.k), (lx, cart_y + 20 * self.k), max(1, int(2 * self.k))
-            )
-
-        pygame.draw.rect(surf, _CART, pygame.Rect(cart_x - cart_w / 2, cart_y - cart_h / 2, cart_w, cart_h))
-
-        # pole as a rotated quad: +theta tilts it to the right
-        axle = (cart_x, cart_y - cart_h / 4.0)
-        along = (math.sin(theta), -math.cos(theta))
-        across = (math.cos(theta) * pole_w / 2.0, math.sin(theta) * pole_w / 2.0)
-        tip = (axle[0] + along[0] * self.pole_len, axle[1] + along[1] * self.pole_len)
-        pygame.draw.polygon(
-            surf,
-            _POLE,
-            [
-                (axle[0] - across[0], axle[1] - across[1]),
-                (axle[0] + across[0], axle[1] + across[1]),
-                (tip[0] + across[0], tip[1] + across[1]),
-                (tip[0] - across[0], tip[1] - across[1]),
-            ],
-        )
-        pygame.draw.circle(surf, _AXLE, axle, pole_w / 2.0)

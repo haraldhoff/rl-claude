@@ -9,71 +9,25 @@ optimizer come from warp-nn.
 
 from __future__ import annotations
 
-import dataclasses
-import time
-from typing import Any, Callable
-
 import numpy as np
 import warp as wp
 from warp_nn.optimizers import Adam
 
+from rl_common import PPOConfig, Trainer
+
 from . import kernels as K
-from .models import ActorCritic
+from .agent import ActorCritic
 from .vec_env import seed_kernel
 
 
-@dataclasses.dataclass
-class PPOConfig:
-    env_id: str = "cartpole"
-    env_kwargs: dict[str, Any] = dataclasses.field(default_factory=dict)
-    num_envs: int = 256
-    num_steps: int = 32
-    total_timesteps: int = 500_000
-    learning_rate: float = 1e-3
-    anneal_lr: bool = True
-    gamma: float = 0.99
-    gae_lambda: float = 0.95
-    num_minibatches: int = 8
-    update_epochs: int = 10
-    clip_coef: float = 0.2
-    ent_coef: float = 0.005
-    vf_coef: float = 0.5
-    max_grad_norm: float = 0.5
-    norm_adv: bool = True
-    hidden: tuple[int, ...] = (64, 64)
-    max_episode_steps: int = 500
-    seed: int = 0
-    use_graph: bool = True  # capture the rollout / update epochs as CUDA graphs
-
-    @property
-    def batch_size(self) -> int:
-        return self.num_envs * self.num_steps
-
-    @property
-    def minibatch_size(self) -> int:
-        return self.batch_size // self.num_minibatches
-
-    @property
-    def num_iterations(self) -> int:
-        return max(1, self.total_timesteps // self.batch_size)
-
-
-class PPO:
+class PPO(Trainer):
     def __init__(self, cfg: PPOConfig, *, device: str | wp.Device | None = None):
-        from .registry import make  # local import: the registry imports the envs
-
         self.cfg = cfg
         self.device = wp.get_device(device)
         d = self.device
 
-        self.env = make(
-            cfg.env_id,
-            cfg.num_envs,
-            max_episode_steps=cfg.max_episode_steps,
-            device=d,
-            seed=cfg.seed,
-            **cfg.env_kwargs,
-        )
+        self.env_device = d
+        self.env = self.make_env(cfg.num_envs)
         self.agent = ActorCritic(
             self.env.obs_dim,
             self.env.num_actions,
@@ -97,40 +51,44 @@ class PPO:
         O = self.env.obs_dim
         self.obs_dim = O
 
-        # rollout buffers (batch-major for the network, time-major for GAE)
-        self.obs_buf = wp.zeros((B, O), dtype=wp.float32, device=d)
-        self.next_obs_buf = wp.zeros((B, O), dtype=wp.float32, device=d)
-        self.act_buf = wp.zeros(B, dtype=wp.int32, device=d)
-        self.logp_buf = wp.zeros(B, dtype=wp.float32, device=d)
-        self.adv_buf = wp.zeros(B, dtype=wp.float32, device=d)
-        self.ret_buf = wp.zeros(B, dtype=wp.float32, device=d)
+        def zeros(shape, dtype=wp.float32, requires_grad=False):
+            return wp.zeros(shape, dtype=dtype, device=d, requires_grad=requires_grad)
 
-        self.rew_2d = wp.zeros((T, N), dtype=wp.float32, device=d)
-        self.term_2d = wp.zeros((T, N), dtype=wp.float32, device=d)
-        self.trunc_2d = wp.zeros((T, N), dtype=wp.float32, device=d)
-        self.val_2d = wp.zeros((T, N), dtype=wp.float32, device=d)
-        self.boot_2d = wp.zeros((T, N), dtype=wp.float32, device=d)
-        self.adv_2d = wp.zeros((T, N), dtype=wp.float32, device=d)
-        self.ret_2d = wp.zeros((T, N), dtype=wp.float32, device=d)
+        # rollout buffers: batch-major for the network...
+        self.obs_buf = zeros((B, O))
+        self.next_obs_buf = zeros((B, O))
+        self.act_buf = zeros(B, wp.int32)
+        self.logp_buf = zeros(B)
+        self.adv_buf = zeros(B)
+        self.ret_buf = zeros(B)
+
+        # ... and time-major for the GAE recursion
+        self.rew_2d = zeros((T, N))
+        self.term_2d = zeros((T, N))
+        self.trunc_2d = zeros((T, N))
+        self.val_2d = zeros((T, N))
+        self.boot_2d = zeros((T, N))
+        self.adv_2d = zeros((T, N))
+        self.ret_2d = zeros((T, N))
 
         # per-step scratch shared by the rollout kernels
-        self.env_actions = wp.zeros(N, dtype=wp.int32, device=d)
-        self.env_logps = wp.zeros(N, dtype=wp.float32, device=d)
+        self.env_actions = zeros(N, wp.int32)
+        self.env_logps = zeros(N)
 
         # minibatch scratch
-        self.mb_obs = wp.zeros((M, O), dtype=wp.float32, device=d)
-        self.mb_act = wp.zeros(M, dtype=wp.int32, device=d)
-        self.mb_logp = wp.zeros(M, dtype=wp.float32, device=d)
-        self.mb_adv = wp.zeros(M, dtype=wp.float32, device=d)
-        self.mb_ret = wp.zeros(M, dtype=wp.float32, device=d)
-        self.indices = wp.zeros(B, dtype=wp.int32, device=d)
+        self.mb_obs = zeros((M, O))
+        self.mb_act = zeros(M, wp.int32)
+        self.mb_logp = zeros(M)
+        self.mb_adv = zeros(M)
+        self.mb_ret = zeros(M)
+        self.indices = zeros(B, wp.int32)
 
-        self.loss = wp.zeros(1, dtype=wp.float32, device=d, requires_grad=True)
-        self.moments = wp.zeros(2, dtype=wp.float32, device=d)
-        self.metrics = wp.zeros(4, dtype=wp.float32, device=d)
+        self.loss = zeros(1, requires_grad=True)
+        self.moments = zeros(2)
+        self.metrics = zeros(4)
 
         # per-env RNG for action sampling (independent of the env's own RNG)
-        self.rng_states = wp.zeros(N, dtype=wp.uint32, device=d)
+        self.rng_states = zeros(N, wp.uint32)
         wp.launch(seed_kernel, dim=N, inputs=[cfg.seed + 12345, self.rng_states], device=d)
 
         self._np_rng = np.random.default_rng(cfg.seed)
@@ -140,7 +98,6 @@ class PPO:
         self._update_warm = False
         self._grad_views = None
         self._loss_view = self.loss.flatten()
-        self.global_step = 0
 
     # -- rollout ------------------------------------------------------------
 
@@ -324,83 +281,17 @@ class PPO:
         entropy, approx_kl, clipfrac, v_loss = (float(v) for v in self.metrics.numpy())
         return {"entropy": entropy, "approx_kl": approx_kl, "clipfrac": clipfrac, "value_loss": v_loss}
 
-    # -- training loop ------------------------------------------------------
+    # -- one iteration ------------------------------------------------------
 
-    def train(self, *, log_every: int = 1, callback: Callable[[dict], None] | None = None) -> None:
-        cfg = self.cfg
-        self.env.reset(seed=cfg.seed)
+    def iterate(self, lr: float) -> dict:
+        """One rollout plus one update; returns this iteration's metrics."""
+        self.rollout()
+        self.compute_advantages()
+        stats = self.update(lr)
+        ep_return, ep_length, ep_count = self.env.pop_episode_stats()
+        stats.update(episodic_return=ep_return, episodic_length=ep_length, episodes=ep_count)
+        return stats
 
-        start = time.time()
-        for it in range(1, cfg.num_iterations + 1):
-            frac = 1.0 - (it - 1) / cfg.num_iterations
-            lr = cfg.learning_rate * frac if cfg.anneal_lr else cfg.learning_rate
-
-            self.rollout()
-            self.global_step += cfg.batch_size
-            self.compute_advantages()
-            stats = self.update(lr)
-
-            ep_return, ep_length, ep_count = self.env.pop_episode_stats()
-            elapsed = time.time() - start
-            stats.update(
-                iteration=it,
-                global_step=self.global_step,
-                episodic_return=ep_return,
-                episodic_length=ep_length,
-                episodes=ep_count,
-                lr=lr,
-                sps=self.global_step / max(elapsed, 1e-9),
-                elapsed=elapsed,
-            )
-            if callback is not None:
-                callback(stats)
-            elif log_every and (it % log_every == 0 or it == cfg.num_iterations):
-                print(
-                    f"iter {it:4d}/{cfg.num_iterations}  step {self.global_step:>9,}  "
-                    f"return {ep_return:8.1f}  len {ep_length:6.1f}  "
-                    f"entropy {stats['entropy']:.3f}  kl {stats['approx_kl']:.4f}  "
-                    f"clipfrac {stats['clipfrac']:.3f}  v_loss {stats['value_loss']:8.2f}  "
-                    f"{stats['sps']:,.0f} steps/s"
-                )
-
-    # -- evaluation ---------------------------------------------------------
-
-    def evaluate(self, *, num_envs: int = 64, max_episode_steps: int | None = None, seed: int = 12345) -> dict:
-        """Run the greedy (argmax) policy until every env finishes one episode."""
-        from .registry import make
-
-        cfg = self.cfg
-        limit = max_episode_steps or cfg.max_episode_steps
-        env = make(
-            cfg.env_id,
-            num_envs,
-            max_episode_steps=limit,
-            autoreset=False,
-            device=self.device,
-            seed=seed,
-            **cfg.env_kwargs,
-        )
-        obs, _ = env.reset()
-        actions = wp.zeros(num_envs, dtype=wp.int32, device=self.device)
-        alive = np.ones(num_envs, dtype=bool)
-        returns = np.zeros(num_envs, dtype=np.float32)
-        lengths = np.zeros(num_envs, dtype=np.int64)
-
-        for _ in range(limit):
-            logits = self.agent.policy(obs)
-            wp.launch(self.greedy_actions, dim=num_envs, inputs=[logits, actions], device=self.device)
-            obs, reward, terminated, truncated, _ = env.step(actions)
-            done = (terminated.numpy() + truncated.numpy()) > 0
-            returns += alive * reward.numpy()
-            lengths += alive
-            alive &= ~done
-            if not alive.any():
-                break
-        return {
-            "mean_return": float(returns.mean()),
-            "std_return": float(returns.std()),
-            "min_return": float(returns.min()),
-            "max_return": float(returns.max()),
-            "mean_length": float(lengths.mean()),
-            "num_episodes": int(num_envs),
-        }
+    def train(self, **kwargs) -> list[dict]:
+        self.env.reset(seed=self.cfg.seed)
+        return super().train(**kwargs)
