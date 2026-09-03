@@ -1,16 +1,21 @@
 """Watch a policy play, on any backend.
 
-    python play.py                                        # train cartpole, then open a window
-    python play.py --env lunarlander --weights weights/lunarlander.npz
-    python play.py --backend jax --env mountaincar --weights weights/jax/mountaincar.npz
-    python play.py --num-render 9 --gif media/grid.gif
-    python play.py --random --stochastic                  # an untrained policy
+    python scripts/play.py                                        # train cartpole, then open a window
+    python scripts/play.py --env lunarlander --weights weights/lunarlander.npz
+    python scripts/play.py --backend jax --env mountaincar --weights weights/jax/mountaincar.npz
+    python scripts/play.py --num-render 9 --gif media/grid.gif
+    python scripts/play.py --random --stochastic                  # an untrained policy
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import sys
+
+# the repo root, so `python scripts/play.py` works from a bare checkout and
+# not only from an installed package -- same bootstrap as tools/
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 

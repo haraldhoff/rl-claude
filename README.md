@@ -9,12 +9,12 @@ the environment specifications, the hyperparameters, the registry, the renderers
 the training-loop and evaluation scaffolding -- lives once, in `rl_common`.
 
 ```
-python train.py --env cartpole                       # warp (default backend)
-python train.py --env cartpole --backend jax        # the same run in JAX + Flax
-python train.py --env cartpole --backend sb3        # ... or SB3's reference PPO
-python train.py --env cartpole --backend sb3 --env-backend gym   # SB3 on stock Gymnasium
-python play.py  --env lunarlander --weights weights/lunarlander.npz   # watch it fly
-python -m pytest tests -q                            # 89 checks, all backends
+python scripts/train.py --env cartpole                    # warp (default backend)
+python scripts/train.py --env cartpole --backend jax      # the same run in JAX + Flax
+python scripts/train.py --env cartpole --backend sb3      # ... or SB3's reference PPO
+python scripts/train.py --env cartpole --backend sb3 --env-backend gym   # SB3 on stock Gymnasium
+python scripts/play.py  --env lunarlander --weights weights/lunarlander.npz   # watch it fly
+python -m pytest tests -q                                 # 89 checks, all backends
 ```
 
 ![lunar lander landing on the pad](media/lunarlander.gif)
@@ -58,8 +58,8 @@ rl_common/     shared: specs, config, registry, renderers, Gymnasium adapter,
 warp_rl/       backend: Warp kernels + warp-nn networks + tape-based PPO
 jax_rl/        backend: pure-function envs + Flax networks + jitted PPO
 sb3_rl/        backend: SB3's PPO on our envs through a VecEnv adapter
-train.py       --env {cartpole,lunarlander,mountaincar} --backend {warp,jax,sb3}
-play.py        same flags, plus recording and N-environment grids
+scripts/       train.py  --env {cartpole,lunarlander,mountaincar} --backend {warp,jax,sb3}
+               play.py   same flags, plus recording and N-environment grids
 tests/         per-environment checks (all backends), cross-backend parity,
                the shared core (CLI/registry/checkpoint portability)
 tools/         Box2D cross-check for the lander, warp <-> jax weight conversion
@@ -241,11 +241,11 @@ episode is a decent argument for keeping three implementations around.
 ## Watching it play
 
 ```
-python play.py --env lunarlander --weights weights/lunarlander.npz
-python play.py --env lunarlander --num-render 9 --tile 400 280    # nine landers at once
-python play.py --env mountaincar --backend jax --weights weights/jax/mountaincar.npz
-python play.py --env cartpole --gif media/cartpole.gif            # record instead of display
-python play.py --env lunarlander --random --stochastic            # an untrained policy
+python scripts/play.py --env lunarlander --weights weights/lunarlander.npz
+python scripts/play.py --env lunarlander --num-render 9 --tile 400 280    # nine landers at once
+python scripts/play.py --env mountaincar --backend jax --weights weights/jax/mountaincar.npz
+python scripts/play.py --env cartpole --gif media/cartpole.gif            # record instead of display
+python scripts/play.py --env lunarlander --random --stochastic            # an untrained policy
 ```
 
 The renderer is shared, so the same pictures come out of either backend. With

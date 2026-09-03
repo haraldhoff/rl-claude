@@ -66,8 +66,9 @@ Repository = "https://github.com/hhf/rl-claude"
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
 # --- packaging -------------------------------------------------------------
-# Four top-level packages; train.py and play.py stay repo scripts (run them
-# with `uv run train.py`) rather than becoming importable top-level modules.
+# Four top-level packages. train.py and play.py stay plain scripts rather than
+# becoming importable modules or console entry points; they live in scripts/
+# so nothing but packages sits at the top level (`uv run scripts/train.py`).
 
 [tool.hatch.build.targets.wheel]
 packages = ["rl_common", "warp_rl", "jax_rl", "sb3_rl"]
@@ -80,8 +81,7 @@ include = [
     "sb3_rl",
     "tests",
     "tools",
-    "train.py",
-    "play.py",
+    "scripts",
     "README.md",
 ]
 

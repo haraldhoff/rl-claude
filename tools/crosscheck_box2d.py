@@ -87,7 +87,7 @@ def main() -> None:
         label = f"{args.backend}-trained policy in box2d"
         print(f"{label:34s}  {mean:8.1f}  {std:6.1f}  {landed}/{args.episodes}")
     else:
-        print(f"(no weights at {args.weights}; run train.py --env lunarlander --save {args.weights})")
+        print(f"(no weights at {args.weights}; run scripts/train.py --env lunarlander --save {args.weights})")
 
 
 if __name__ == "__main__":

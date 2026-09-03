@@ -1,15 +1,21 @@
 """Train PPO on one of the three backends.
 
-    python train.py                                  # cartpole, warp backend
-    python train.py --backend jax --env cartpole     # the same run in JAX + Flax
-    python train.py --backend sb3 --env cartpole     # ... or SB3's reference PPO
-    python train.py --backend sb3 --env-backend gym  # ... SB3 on stock Gymnasium
-    python train.py --env lunarlander --gym-eval 10  # cross-check in real Gymnasium
+    python scripts/train.py                                  # cartpole, warp backend
+    python scripts/train.py --backend jax --env cartpole     # the same run in JAX + Flax
+    python scripts/train.py --backend sb3 --env cartpole     # ... or SB3's reference PPO
+    python scripts/train.py --backend sb3 --env-backend gym  # ... SB3 on stock Gymnasium
+    python scripts/train.py --env lunarlander --gym-eval 10  # cross-check in real Gymnasium
 """
 
 from __future__ import annotations
 
 import argparse
+import os
+import sys
+
+# the repo root, so `python scripts/train.py` works from a bare checkout and
+# not only from an installed package -- same bootstrap as tools/
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
