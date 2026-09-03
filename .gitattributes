@@ -1,0 +1,21 @@
+# This project is developed from one directory on two platforms: Ubuntu under
+# WSL and Windows proper. Without this, each platform's editor rewrote whole
+# files' line endings and git saw them as fully rewritten -- 30 of 52 files in
+# the tree were showing as modified with 3138 lines changed and not one of them
+# a real edit.
+#
+# text=auto stores LF in the repository and checks out the platform's native
+# ending, so the churn stops at the boundary instead of entering history.
+* text=auto
+
+# Resolved by uv, not written by hand: keep it out of GitHub's language stats
+# and collapsed in reviews. Deliberately still diffable locally (no -diff), as
+# reading which wheels moved is genuinely useful.
+uv.lock linguist-generated=true
+
+# The trained checkpoints and the README's recordings. text=auto detects these
+# as binary on its own; saying so explicitly keeps a future eol= rule from ever
+# being applied to them.
+*.npz binary
+*.gif binary
+*.mp4 binary
