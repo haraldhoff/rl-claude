@@ -180,8 +180,12 @@ else, so with uniformly random actions the flag is unreachable -- **0 of 4096
 episodes** -- and PPO has no signal at all. Holding each action for 8 physics
 steps makes random exploration resonate up the hill (55 of 4096), which is the
 difference between unlearnable and solved in 8 seconds. Rewards still count
-physics steps, so returns stay comparable to `MountainCar-v0`, and
-`action_repeat=1` is the untouched environment.
+physics steps, so returns stay comparable to `MountainCar-v0`. The repeat
+belongs to the registry's environment entry rather than to its PPO settings, so
+every entry point applies it -- `make("mountaincar", n)` and
+`gym.make("WarpMountainCar-v0")` both give the 200-physics-step episode the
+original has, where the limit alone would have given 25. Passing
+`action_repeat=1` recovers the untouched environment.
 
 **Lunar Lander** -- Gymnasium's task definition (terrain with its `0.33`
 smoothing quirk, the 8-dim observation, the shaping reward and fuel costs, the

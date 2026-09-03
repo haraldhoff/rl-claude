@@ -45,6 +45,9 @@ class EnvSpec:
     solved_return: float
     renderer: str
     backends: dict[str, str]
+    # constructor arguments that are part of what the environment *is*, as
+    # opposed to how PPO is tuned for it; :func:`make` applies these
+    env_kwargs: dict[str, Any] = dataclasses.field(default_factory=dict)
     ppo: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     def env_cls(self, backend: str):
@@ -111,8 +114,12 @@ REGISTRY: dict[str, EnvSpec] = {
         solved_return=-110.0,
         renderer="rl_common.render.mountain_car:MountainCarRenderer",
         backends=_implementations("mountain_car", "MountainCarVectorEnv"),
+        # the limit above counts *decisions*, which is MountainCar-v0's 200
+        # physics steps only while the repeat is applied -- so the repeat is
+        # not a PPO setting, it is half of that definition, and every entry
+        # point has to see it: the library, gym.make, and the trainer alike.
+        env_kwargs=dict(action_repeat=car_spec.ACTION_REPEAT),
         ppo=dict(
-            env_kwargs=dict(action_repeat=car_spec.ACTION_REPEAT),
             num_envs=512,
             num_steps=32,
             total_timesteps=4_000_000,
@@ -163,9 +170,16 @@ def spec(env_id: str) -> EnvSpec:
 
 
 def make(env_id: str, num_envs: int = 1, *, backend: str = "warp", **kwargs):
-    """Create a vectorized environment by id, on the given backend."""
+    """Create a vectorized environment by id, on the given backend.
+
+    The environment's own ``env_kwargs`` are filled in for anything the caller
+    did not pass, so ``make("mountaincar", n)`` is the environment the registry
+    describes rather than a 25-step truncation of it.
+    """
     s = spec(env_id)
     kwargs.setdefault("max_episode_steps", s.max_episode_steps)
+    for key, value in s.env_kwargs.items():
+        kwargs.setdefault(key, value)
     return s.env_cls(backend)(num_envs, **kwargs)
 
 
@@ -200,7 +214,13 @@ def default_config(env_id: str, *, backend: str = "warp", **overrides) -> PPOCon
     """
     s = spec(env_id)
     fields = {f.name for f in dataclasses.fields(PPOConfig)}
-    cfg = dict(env_id=normalize_id(env_id), backend=backend, max_episode_steps=s.max_episode_steps, **s.ppo)
+    cfg = dict(
+        env_id=normalize_id(env_id),
+        backend=backend,
+        max_episode_steps=s.max_episode_steps,
+        env_kwargs=dict(s.env_kwargs),
+        **s.ppo,
+    )
     for key, value in overrides.items():
         if key not in fields:
             raise TypeError(f"unknown PPOConfig field '{key}'")

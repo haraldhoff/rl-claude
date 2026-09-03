@@ -44,7 +44,8 @@ def test_single_step_dynamics_match(backend):
     rng = np.random.default_rng(0)
     envs, states = _gym_envs(NUM_ENVS)
     env = rl_common.make(
-        "mountaincar", NUM_ENVS, backend=backend, max_episode_steps=STEPS, autoreset=False
+        "mountaincar", NUM_ENVS, backend=backend, max_episode_steps=STEPS,
+        action_repeat=1, autoreset=False,  # stock MountainCar-v0, one step per action
     )
     env.reset(seed=0)
 
@@ -81,7 +82,8 @@ def test_full_episode_matches(backend):
     rng = np.random.default_rng(1)
     envs, states = _gym_envs(NUM_ENVS, seed=100)
     env = rl_common.make(
-        "mountaincar", NUM_ENVS, backend=backend, max_episode_steps=STEPS, autoreset=False
+        "mountaincar", NUM_ENVS, backend=backend, max_episode_steps=STEPS,
+        action_repeat=1, autoreset=False,  # stock MountainCar-v0, one step per action
     )
     env.reset(seed=0)
     env.set_state(states)

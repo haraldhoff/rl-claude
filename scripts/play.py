@@ -80,7 +80,11 @@ def main() -> None:
     # environments that train with an action repeat are played back at the
     # physics rate: same trajectory, but every frame is drawn
     repeat = int(cfg.env_kwargs.get("action_repeat", 1))
-    env_kwargs = {k: v for k, v in cfg.env_kwargs.items() if k != "action_repeat"}
+    env_kwargs = dict(cfg.env_kwargs)
+    if repeat > 1:
+        # one action per frame here, held for `repeat` frames by the loop below;
+        # make() would otherwise apply the spec's repeat and skip 7 of every 8
+        env_kwargs["action_repeat"] = 1
     env = make(
         args.env,
         num_envs,
