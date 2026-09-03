@@ -179,11 +179,20 @@ class PPO(Trainer):
             optax.inject_hyperparams(optax.adam)(learning_rate=cfg.learning_rate, eps=1e-8),
         )
         key, env_key = jax.random.split(jax.device_put(jax.random.PRNGKey(cfg.seed), self.device))
-        self.runner = RunnerState(
-            params=self.agent.params,
-            opt_state=self.tx.init(self.agent.params),
-            env_state=vec_reset(self.env, env_key, cfg.num_envs),
-            key=key,
+        # The whole runner state lives on self.device.  Only some of it gets
+        # there on its own: leaves derived from a committed input inherit its
+        # placement, but the ones built fresh and eagerly -- optax's step count
+        # and injected learning rate, vec_reset's zeroed episode counters --
+        # would land on JAX's default device instead, which is not ours
+        # whenever --device asks for anything but the first one.
+        self.runner = jax.device_put(
+            RunnerState(
+                params=self.agent.params,
+                opt_state=self.tx.init(self.agent.params),
+                env_state=vec_reset(self.env, env_key, cfg.num_envs),
+                key=key,
+            ),
+            self.device,
         )
         self._iteration = jax.jit(self._build_iteration())
 

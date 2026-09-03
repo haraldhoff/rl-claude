@@ -44,10 +44,11 @@ Throughput on this machine: Warp reaches 85k-170k env steps/s on cartpole,
 ~290k on the lander and ~520k on mountain car, *including* the PPO update. SB3
 (torch on the CPU, driving our Warp environments) gets 29k / 75k / 89k, and its
 cost is the per-step host round-trip its `VecEnv` API requires. The JAX numbers
-come from a **CPU-only** jaxlib (no CUDA plugin installed here), so they measure
-a different machine class, not a different algorithm: ~21k steps/s on cartpole,
-~63k on mountain car and ~23k on the lander. Install `jax[cuda12]` and the same
-code runs on the GPU.
+were measured against a **CPU-only** jaxlib, before the `jax` extra asked for a
+CUDA build, so they describe a different machine class rather than a different
+algorithm: ~21k steps/s on cartpole, ~63k on mountain car and ~23k on the
+lander. The extra now installs `jax[cuda13]` on Linux, so the same code runs on
+the GPU and those three numbers are due a re-measurement.
 
 ## Layout
 
@@ -322,7 +323,7 @@ extra, and you need at least one:
 
 ```
 uv sync --extra warp     # warp-lang + warp-nn
-uv sync --extra jax      # jax + flax + optax
+uv sync --extra jax      # jax + flax + optax (CUDA 13 build on Linux)
 uv sync --extra sb3      # stable-baselines3 + torch (its envs come from warp or jax)
 uv sync --extra all      # everything, which is what the test suite wants
 ```
@@ -333,6 +334,9 @@ tests, `--gym-eval`), `render` (pygame, for `play.py` windows), `record`
 `pygame-ce` rather than `pygame`: Gymnasium depends on the former and the two
 ship the same `pygame` import package, so installing both makes them collide.
 
-Without uv, `pip install -e '.[all]'` does the same thing. Note that PyPI's
-`torch` wheel is CPU-only on Windows -- `pyproject.toml` ends with the index
-declaration needed for a CUDA build.
+Without uv, `pip install -e '.[all]'` does the same thing. Two platform notes,
+both spelled out in `pyproject.toml`: PyPI's `torch` wheel is CPU-only on
+Windows (the file ends with the index declaration needed for a CUDA build), and
+the `jax` extra's CUDA 13 wheels exist only for Linux x86_64 on Python >= 3.11,
+so anywhere else it resolves to the CPU-only jaxlib. JAX has never shipped GPU
+wheels for Windows; WSL2 is the GPU path there.

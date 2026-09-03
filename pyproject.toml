@@ -31,7 +31,13 @@ warp = [
     "warp-nn>=0.3,<0.4",
 ]
 jax = [
-    "jax>=0.4.35",  # jax.tree.map
+    # CUDA 13 build. The jax-cuda13-* plugin wheels are Linux x86_64 only --
+    # JAX ships no GPU wheels for Windows, where the GPU path is WSL2 anyway --
+    # and the cuda13 extra first appears in jax 0.7, which wants Python >= 3.11.
+    # Anywhere outside that box this falls back to the CPU-only jaxlib, which is
+    # what the extra resolved to before.
+    "jax[cuda13]>=0.7; sys_platform == 'linux' and python_version >= '3.11'",
+    "jax>=0.4.35; sys_platform != 'linux' or python_version < '3.11'",  # jax.tree.map
     "flax>=0.10",
     "optax>=0.2.2",  # optax.inject_hyperparams
 ]
