@@ -19,9 +19,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import rl_common  # noqa: E402
-from rl_common import to_numpy  # noqa: E402
-from rl_common.specs import lunar_lander as ll  # noqa: E402
+import rl_common
+from rl_common import to_numpy
+from rl_common.specs import lunar_lander as ll
 
 BACKENDS = ["warp", "jax"]
 
@@ -217,7 +217,10 @@ def test_heuristic_controller_lands(backend):
     landed = int((last > 50).sum())
     assert returns.mean() > 150.0, f"heuristic only scored {returns.mean():.1f}"
     assert landed > 0.8 * n, f"heuristic only landed {landed}/{n} times"
-    print(f"[{backend}] heuristic controller: mean return {returns.mean():.1f}, landed {landed}/{n} (+100 on touchdown)")
+    print(
+        f"[{backend}] heuristic controller: mean return {returns.mean():.1f}, "
+        f"landed {landed}/{n} (+100 on touchdown)"
+    )
 
 
 def test_training_improves_return():

@@ -19,8 +19,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import rl_common  # noqa: E402
-from rl_common import to_numpy  # noqa: E402
+import rl_common
+from rl_common import to_numpy
 
 NUM_ENVS = 16
 

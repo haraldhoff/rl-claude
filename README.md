@@ -14,7 +14,7 @@ python train.py --env cartpole --backend jax        # the same run in JAX + Flax
 python train.py --env cartpole --backend sb3        # ... or SB3's reference PPO
 python train.py --env cartpole --backend sb3 --env-backend gym   # SB3 on stock Gymnasium
 python play.py  --env lunarlander --weights weights/lunarlander.npz   # watch it fly
-python -m pytest tests -q                            # 62 checks, all backends
+python -m pytest tests -q                            # 89 checks, all backends
 ```
 
 ![lunar lander landing on the pad](media/lunarlander.gif)
@@ -59,7 +59,8 @@ jax_rl/        backend: pure-function envs + Flax networks + jitted PPO
 sb3_rl/        backend: SB3's PPO on our envs through a VecEnv adapter
 train.py       --env {cartpole,lunarlander,mountaincar} --backend {warp,jax,sb3}
 play.py        same flags, plus recording and N-environment grids
-tests/         per-environment checks (all backends) + cross-backend parity
+tests/         per-environment checks (all backends), cross-backend parity,
+               the shared core (CLI/registry/checkpoint portability)
 tools/         Box2D cross-check for the lander, warp <-> jax weight conversion
 ```
 
@@ -95,8 +96,8 @@ loop), `sb3_rl/agent.py` puts an SB3 policy behind the same `act`/`save`/`load`
 interface as the others, and `sb3_rl/ppo.py` drives `stable_baselines3.PPO` one
 iteration at a time from the *shared* training loop.
 
-Roughly 1200 lines of shared code, 1850 of Warp, 1050 of JAX, 400 of SB3 glue,
-and 1300 of tests.
+Roughly 1400 lines of shared code, 1850 of Warp, 1100 of JAX, 430 of SB3 glue,
+and 1550 of tests.
 
 ## What is shared, and what is not
 
@@ -315,8 +316,23 @@ obs, reward, terminated, truncated, info = env.step(actions)
 
 ## Requirements
 
-`numpy`, plus at least one backend: `warp-lang` + `warp-nn`, `jax` + `flax` +
-`optax`, or `stable-baselines3` + `torch` (which also needs one of the first two
-for its environments). Optional: `gymnasium` (space objects, the Gymnasium
-adapter, the parity tests, `--gym-eval`), `pygame` (rendering), `imageio`
-(recording), `gymnasium[box2d]` (the lander cross-check).
+`rl_common` itself needs only `numpy` -- the specs, the config, the registry and
+the training loop do not depend on how anything is computed. Each backend is an
+extra, and you need at least one:
+
+```
+uv sync --extra warp     # warp-lang + warp-nn
+uv sync --extra jax      # jax + flax + optax
+uv sync --extra sb3      # stable-baselines3 + torch (its envs come from warp or jax)
+uv sync --extra all      # everything, which is what the test suite wants
+```
+
+The remaining extras are `gym` (space objects, the Gymnasium adapter, the parity
+tests, `--gym-eval`), `render` (pygame, for `play.py` windows), `record`
+(imageio, for `--gif`) and `box2d` (the lander cross-check). `render` asks for
+`pygame-ce` rather than `pygame`: Gymnasium depends on the former and the two
+ship the same `pygame` import package, so installing both makes them collide.
+
+Without uv, `pip install -e '.[all]'` does the same thing. Note that PyPI's
+`torch` wheel is CPU-only on Windows -- `pyproject.toml` ends with the index
+declaration needed for a CUDA build.

@@ -17,6 +17,8 @@ from flax.traverse_util import flatten_dict, unflatten_dict
 
 from rl_common.agent import Agent
 
+from .vec_env import resolve_device
+
 
 class MLP(nn.Module):
     hidden: tuple[int, ...]
@@ -62,14 +64,16 @@ class ActorCritic(Agent):
         *,
         hidden: tuple[int, ...] = (64, 64),
         seed: int = 0,
-        device=None,  # accepted for API parity with the Warp backend
+        device=None,  # "cpu", "cuda:0", a JAX device, or None for the default
     ):
         self.obs_dim = obs_dim
         self.num_actions = num_actions
         self.hidden = tuple(hidden)
+        self.device = resolve_device(device)
         self.net = ActorCriticNet(num_actions=num_actions, hidden=self.hidden)
-        self.params = self.net.init(jax.random.PRNGKey(seed), jnp.zeros((1, obs_dim), jnp.float32))
-        self.key = jax.random.PRNGKey(seed + 12345)
+        params = self.net.init(jax.random.PRNGKey(seed), jnp.zeros((1, obs_dim), jnp.float32))
+        self.params = jax.device_put(params, self.device)
+        self.key = jax.device_put(jax.random.PRNGKey(seed + 12345), self.device)
         self.apply = jax.jit(self.net.apply)
         self._greedy = jax.jit(lambda params, obs: jnp.argmax(self.net.apply(params, obs)[0], axis=-1))
         self._sample = jax.jit(lambda params, obs, key: jax.random.categorical(key, self.net.apply(params, obs)[0]))
@@ -91,4 +95,4 @@ class ActorCritic(Agent):
     def load(self, path: str) -> None:
         data = np.load(path)
         flat = {k: jnp.asarray(data[k]) for k in data.files}
-        self.params = unflatten_dict(flat, sep="/")
+        self.params = jax.device_put(unflatten_dict(flat, sep="/"), self.device)

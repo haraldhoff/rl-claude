@@ -23,7 +23,7 @@ import optax
 from rl_common import PPOConfig, Trainer
 
 from .agent import ActorCritic
-from .vec_env import vec_reset, vec_step
+from .vec_env import resolve_device, vec_reset, vec_step
 
 
 class RunnerState(NamedTuple):
@@ -139,9 +139,23 @@ def make_epoch(loss_fn, tx, cfg: PPOConfig) -> Callable:
 
 
 def set_learning_rate(opt_state, lr):
-    """Push the annealed learning rate into the injected Adam hyperparameters."""
-    clip_state, inject_state = opt_state
-    return (clip_state, inject_state._replace(hyperparams={**inject_state.hyperparams, "learning_rate": lr}))
+    """Push the annealed learning rate into the injected Adam hyperparameters.
+
+    The ``optax.inject_hyperparams`` state is found by looking for the member
+    that carries a ``learning_rate`` hyperparameter rather than by position, so
+    reordering or extending the chain in :class:`PPO` cannot silently stop the
+    annealing.  This runs under ``jit``, so the check costs one trace.
+    """
+    updated, found = [], False
+    for state in opt_state:
+        hyperparams = getattr(state, "hyperparams", None)
+        if isinstance(hyperparams, dict) and "learning_rate" in hyperparams:
+            state = state._replace(hyperparams={**hyperparams, "learning_rate": lr})
+            found = True
+        updated.append(state)
+    if not found:
+        raise ValueError("no optax.inject_hyperparams state carrying 'learning_rate' in the optimizer chain")
+    return tuple(updated)
 
 
 # ---------------------------------------------------------------------------
@@ -152,16 +166,19 @@ def set_learning_rate(opt_state, lr):
 class PPO(Trainer):
     def __init__(self, cfg: PPOConfig, *, device=None):
         self.cfg = cfg
+        self.device = resolve_device(device)
+        self.env_device = self.device  # make_env hands this to the vector env
         self.vec_env = self.make_env(cfg.num_envs)
         self.env = self.vec_env.env  # the functional single-env core
-        self.device = self.vec_env.device
 
-        self.agent = ActorCritic(self.vec_env.obs_dim, self.vec_env.num_actions, hidden=cfg.hidden, seed=cfg.seed)
+        self.agent = ActorCritic(
+            self.vec_env.obs_dim, self.vec_env.num_actions, hidden=cfg.hidden, seed=cfg.seed, device=self.device
+        )
         self.tx = optax.chain(
             optax.clip_by_global_norm(cfg.max_grad_norm),
             optax.inject_hyperparams(optax.adam)(learning_rate=cfg.learning_rate, eps=1e-8),
         )
-        key, env_key = jax.random.split(jax.random.PRNGKey(cfg.seed))
+        key, env_key = jax.random.split(jax.device_put(jax.random.PRNGKey(cfg.seed), self.device))
         self.runner = RunnerState(
             params=self.agent.params,
             opt_state=self.tx.init(self.agent.params),

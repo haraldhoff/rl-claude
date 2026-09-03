@@ -1,0 +1,117 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rl-claude"
+version = "0.1.0"
+description = "PPO and three classic-control environments, implemented in NVIDIA Warp, JAX and Stable-Baselines3 behind one shared core"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+keywords = ["reinforcement-learning", "ppo", "warp", "jax", "stable-baselines3", "gpu"]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# rl_common alone needs nothing but numpy: the specs, the config, the registry,
+# the training loop and the array helpers are all backend-agnostic.  A backend
+# is an extra, and at least one is required to actually run anything.
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+# Lower bounds are the versions this was verified against, except where the API
+# in use is long-stable; relax them freely.
+warp = [
+    "warp-lang>=1.17",
+    # 0.x, and warp_rl/ppo.py reaches into Adam._lr for the shared loop's
+    # annealing -- keep this on a known-good minor.
+    "warp-nn>=0.3,<0.4",
+]
+jax = [
+    "jax>=0.4.35",  # jax.tree.map
+    "flax>=0.10",
+    "optax>=0.2.2",  # optax.inject_hyperparams
+]
+sb3 = [
+    "stable-baselines3>=2.4",  # first release on gymnasium 1.0
+    "torch>=2.2",
+    "gymnasium>=1.0",  # sb3_rl/ppo.py refers to LunarLander-v3
+]
+
+gym = ["gymnasium>=1.0"]  # space objects, gym_api, the parity tests, --gym-eval
+# pygame-ce, not pygame: gymnasium depends on pygame-ce, and the two ship the
+# same `pygame` import package, so asking for both makes them clobber each
+# other in site-packages. The renderers only use the common API.
+render = ["pygame-ce>=2.5"]  # play.py windows
+record = ["imageio>=2.34", "imageio-ffmpeg>=0.5"]  # --gif out.gif / out.mp4
+box2d = ["gymnasium[box2d]>=1.0"]  # tools/crosscheck_box2d.py
+
+# Everything, for running the full test suite and both tools.
+all = ["rl-claude[warp,jax,sb3,gym,render,record,box2d]"]
+
+[project.urls]
+Repository = "https://github.com/hhf/rl-claude"
+
+# PEP 735 group: installed by `uv sync` without needing an extra.
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+# --- packaging -------------------------------------------------------------
+# Four top-level packages; train.py and play.py stay repo scripts (run them
+# with `uv run train.py`) rather than becoming importable top-level modules.
+
+[tool.hatch.build.targets.wheel]
+packages = ["rl_common", "warp_rl", "jax_rl", "sb3_rl"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "rl_common",
+    "warp_rl",
+    "jax_rl",
+    "sb3_rl",
+    "tests",
+    "tools",
+    "train.py",
+    "play.py",
+    "README.md",
+]
+
+# --- tooling ---------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+# The test files insert the repo root on sys.path themselves, so they also run
+# as plain scripts; this makes `import rl_common` work either way.
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+# `select` is pinned explicitly rather than left implicit: ruff's default rule
+# set grows between releases (0.16 enables 413 rules), so relying on it would
+# make the lint result depend on which ruff you happen to have. The tree is
+# clean under exactly this set. Widening it is a separate, deliberate cleanup.
+[tool.ruff.lint]
+select = ["E4", "E5", "E7", "E9", "F", "W", "SLF"]  # E5 = line length
+ignore = ["E741"]  # O = obs_dim, matching the buffer-shape comments in warp_rl/ppo.py
+
+[tool.ruff.lint.per-file-ignores]
+# the PPO tests drive the trainer's internals directly (_zero, _loss_view) to
+# check gradients against finite differences
+"tests/*" = ["SLF001"]
+
+# --- uv --------------------------------------------------------------------
+# `torch` from PyPI is CPU-only on Windows. To match a CUDA build, add:
+#
+#   [[tool.uv.index]]
+#   name = "pytorch-cu128"
+#   url = "https://download.pytorch.org/whl/cu128"
+#   explicit = true
+#
+#   [tool.uv.sources]
+#   torch = { index = "pytorch-cu128" }

@@ -64,7 +64,11 @@ class MountainCarRenderer(TiledRenderer):
         pygame.draw.polygon(
             surf,
             _FLAG,
-            [flag_top, (flag_top[0] + 25 * self.k, flag_top[1] + 10 * self.k), (flag_top[0], flag_top[1] + 20 * self.k)],
+            [
+                flag_top,
+                (flag_top[0] + 25 * self.k, flag_top[1] + 10 * self.k),
+                (flag_top[0], flag_top[1] + 20 * self.k),
+            ],
         )
 
         # car: a box rotated to the slope, sitting `clearance` above the curve

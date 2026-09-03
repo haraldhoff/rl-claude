@@ -22,9 +22,9 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tests"))
 
-import rl_common  # noqa: E402
-from rl_common import to_numpy  # noqa: E402
-from test_lunar_lander import heuristic  # noqa: E402
+import rl_common
+from rl_common import to_numpy
+from test_lunar_lander import heuristic
 
 
 def run_backend(policy, episodes: int, seed: int, backend: str) -> tuple[float, float, int]:

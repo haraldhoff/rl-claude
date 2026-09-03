@@ -17,11 +17,11 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import gymnasium as gym  # noqa: E402
+import gymnasium as gym
 
-import rl_common  # noqa: E402
-from rl_common import to_numpy  # noqa: E402
-from rl_common.specs import mountain_car as mc  # noqa: E402
+import rl_common
+from rl_common import to_numpy
+from rl_common.specs import mountain_car as mc
 
 BACKENDS = ["warp", "jax"]
 NUM_ENVS = 16

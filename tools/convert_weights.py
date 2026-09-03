@@ -17,7 +17,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import rl_common  # noqa: E402
+import rl_common
 
 # Sequential indices of the Linear layers in the Warp model (Linear, Tanh, ...)
 _WARP_LINEAR_INDICES = (0, 2, 4, 6, 8)

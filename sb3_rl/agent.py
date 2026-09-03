@@ -67,7 +67,8 @@ def resolve_device(device) -> str:
     """
     if device is None:
         return "cpu"
-    return "cuda" if str(device).startswith("cuda") else "cpu"
+    name = str(device)
+    return name if name.startswith("cuda") else "cpu"  # keep the index: "cuda:1" is a torch device
 
 
 def policy_kwargs(hidden: tuple[int, ...]) -> dict:

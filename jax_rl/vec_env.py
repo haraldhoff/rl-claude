@@ -38,6 +38,26 @@ class VecState:
     key: jax.Array
 
 
+def resolve_device(device) -> jax.Device:
+    """A JAX device from ``None``, a JAX device, or a Warp-style string.
+
+    Accepts ``"cpu"``, ``"cuda:0"``, ``"gpu:1"`` and so on, so ``--device``
+    selects the same hardware on either backend.  An unavailable backend or
+    index raises rather than falling back silently.
+    """
+    if device is None:
+        return jax.devices()[0]
+    if isinstance(device, jax.Device):
+        return device
+    name, _, index = str(device).partition(":")
+    name = {"cuda": "gpu"}.get(name.lower(), name.lower())
+    devices = jax.devices(name)  # RuntimeError if that backend is not installed
+    position = int(index) if index else 0
+    if position >= len(devices):
+        raise ValueError(f"no {name} device {position}: only {len(devices)} available")
+    return devices[position]
+
+
 def _select(mask: jax.Array, new, old):
     """``where(mask, new, old)`` over a pytree of leading-dim-N leaves."""
     return jax.tree.map(lambda a, b: jnp.where(mask.reshape(mask.shape + (1,) * (a.ndim - 1)), a, b), new, old)
@@ -121,14 +141,14 @@ class JaxVecEnv:
         max_episode_steps: int,
         autoreset: bool = True,
         seed: int = 0,
-        device: Any = None,  # accepted for API parity with the Warp backend
+        device: Any = None,  # "cpu", "cuda:0", a JAX device, or None for the default
         **env_kwargs,
     ):
         self.num_envs = int(num_envs)
         self.max_episode_steps = int(max_episode_steps)
         self.autoreset = bool(autoreset)
         self.env = self.env_cls(**env_kwargs)
-        self.device = jax.devices()[0] if device is None else device
+        self.device = resolve_device(device)
 
         self._reset_fn = jax.jit(lambda key: vec_reset(self.env, key, self.num_envs))
         self._step_fn = jax.jit(
@@ -149,7 +169,9 @@ class JaxVecEnv:
     # -- helpers ------------------------------------------------------------
 
     def _seed(self, seed: int) -> None:
-        self.key = jax.random.PRNGKey(int(seed))
+        # committing the root key to the device places everything downstream:
+        # the jitted reset/step run wherever their inputs live
+        self.key = jax.device_put(jax.random.PRNGKey(int(seed)), self.device)
 
     def _build_spaces(self) -> None:
         high = np.asarray(self.env.observation_high(), dtype=np.float32)

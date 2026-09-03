@@ -18,10 +18,10 @@ import warp as wp
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import rl_common  # noqa: E402
-from rl_common import PPOConfig  # noqa: E402
-from warp_rl import PPO  # noqa: E402
-from warp_rl import kernels as K  # noqa: E402
+import rl_common
+from rl_common import PPOConfig
+from warp_rl import PPO
+from warp_rl import kernels as K
 
 
 def _reference_gae(rewards, values, boot_values, terminated, truncated, gamma, lam):
