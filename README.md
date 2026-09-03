@@ -328,6 +328,11 @@ uv sync --extra sb3      # stable-baselines3 + torch (its envs come from warp or
 uv sync --extra all      # everything, which is what the test suite wants
 ```
 
+A partial install is a supported way to run the tests: `tests/conftest.py`
+turns anything needing an absent extra into a skip -- `--extra jax` alone gives
+32 passed, 19 skipped -- so `--extra all` is what the suite wants only in the
+sense that it is the one install that runs all of it.
+
 The remaining extras are `gym` (space objects, the Gymnasium adapter, the parity
 tests, `--gym-eval`), `render` (pygame, for `play.py` windows), `record`
 (imageio, for `--gif`) and `box2d` (the lander cross-check). `render` asks for
