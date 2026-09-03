@@ -15,6 +15,8 @@ import argparse
 import os
 import sys
 
+import numpy as np
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import rl_common
@@ -57,12 +59,20 @@ def jax_to_warp(env_id: str, source: str, destination: str, hidden=None) -> None
             key = f"{net}.{layer}.weight"
             if key not in state:
                 continue
-            kernel = params[net][f"Dense_{dense}"]["kernel"]
-            bias = params[net][f"Dense_{dense}"]["bias"]
-            wp.copy(state[key], wp.array(kernel.T.copy(), dtype=wp.float32, device=state[key].device))
+            # Stage through host numpy.  Handing wp.array() a JAX *device*
+            # array wraps it by pointer, and the temporary that pointer refers
+            # to is unreferenced the moment this statement ends -- JAX then
+            # reuses the address for the next allocation of that shape while
+            # Warp's copy is still queued.  That silently corrupted every
+            # parameter whose shape occurs in both the policy and the value
+            # net, which on cartpole is four of the six weight tensors, and
+            # was unreachable while jaxlib was CPU-only.
+            kernel = np.ascontiguousarray(np.asarray(params[net][f"Dense_{dense}"]["kernel"]).T)
+            bias = np.ascontiguousarray(np.asarray(params[net][f"Dense_{dense}"]["bias"]).reshape(-1, 1))
+            wp.copy(state[key], wp.array(kernel, dtype=wp.float32, device=state[key].device))
             wp.copy(
                 state[f"{net}.{layer}.bias"],
-                wp.array(bias.reshape(-1, 1).copy(), dtype=wp.float32, device=state[key].device),
+                wp.array(bias, dtype=wp.float32, device=state[key].device),
             )
             dense += 1
     warp_agent.save(destination)

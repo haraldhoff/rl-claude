@@ -6,6 +6,14 @@ them to each other: same state and actions give the same transitions, the same
 weights give the same logits and values, and the same rollout gives the same
 advantages.
 
+The JAX side runs on the **CPU** here, via :data:`JAX_DEVICE`.  These are
+equality tests to a fixed tolerance, and GPU JAX computes f32 matmuls in TF32
+by default -- that alone put the network comparison at 4.9e-04 against a 1e-04
+bound, which measures the GPU's matmul precision rather than whether the two
+implementations agree.  The one test here that asks about *behaviour* rather
+than numerical agreement, ``test_both_backends_learn_cartpole``, is left on
+whatever device the backend picks for itself.
+
 Run with pytest, or directly:  python tests/test_backend_parity.py
 """
 
@@ -24,10 +32,30 @@ from rl_common import to_numpy
 
 NUM_ENVS = 16
 
+# Where the JAX side of every comparison runs; see the module docstring.
+JAX_DEVICE = "cpu"
+
+
+@pytest.fixture(autouse=True)
+def _jax_defaults_to_cpu():
+    """Put *uncommitted* JAX work on the CPU too.
+
+    Passing ``device=JAX_DEVICE`` covers everything built through the registry,
+    but not the bare ``jnp`` arrays a test makes for itself -- and it cannot,
+    because ``resolve_device(None)`` asks for ``jax.devices()[0]`` and never
+    consults this default.  Both mechanisms are needed; neither subsumes the
+    other.  jax is imported here rather than at module scope so the file still
+    collects when the extra is absent.
+    """
+    import jax
+
+    with jax.default_device(jax.devices("cpu")[0]):
+        yield
+
 
 def _pair(env_id: str, num_envs: int = NUM_ENVS, **kwargs):
     warp_env = rl_common.make(env_id, num_envs, backend="warp", autoreset=False, seed=0, **kwargs)
-    jax_env = rl_common.make(env_id, num_envs, backend="jax", autoreset=False, seed=0, **kwargs)
+    jax_env = rl_common.make(env_id, num_envs, backend="jax", autoreset=False, seed=0, device=JAX_DEVICE, **kwargs)
     warp_env.reset()
     jax_env.reset()
     return warp_env, jax_env
@@ -179,7 +207,7 @@ def test_networks_agree_given_the_same_weights():
     import warp as wp
 
     warp_agent = rl_common.make_agent("lunarlander", backend="warp", seed=0)
-    jax_agent = rl_common.make_agent("lunarlander", backend="jax", seed=1)
+    jax_agent = rl_common.make_agent("lunarlander", backend="jax", seed=1, device=JAX_DEVICE)
     _transfer_weights(warp_agent, jax_agent)
 
     obs = np.random.default_rng(0).normal(size=(32, 8)).astype(np.float32)

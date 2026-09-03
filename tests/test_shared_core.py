@@ -191,7 +191,10 @@ def test_weight_conversion_preserves_the_policy(env_id, tmp_path):
     obs_dim = rl_common.spec(env_id).obs_dim
     obs = np.asarray(np.random.default_rng(0).normal(size=(32, obs_dim)), dtype=np.float32)
 
-    jax_agent = rl_common.make_agent(env_id, backend="jax")
+    # on the CPU, for the reason test_backend_parity.py's docstring gives: this
+    # compares two implementations to 1e-05, and GPU JAX would answer with its
+    # TF32 matmul precision instead (4.9e-04 on the lander)
+    jax_agent = rl_common.make_agent(env_id, backend="jax", device="cpu")
     jax_agent.load(str(as_jax))
 
     import warp as wp
