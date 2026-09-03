@@ -18,7 +18,7 @@ import warp as wp
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import rl_common
+import support
 from rl_common import PPOConfig
 from warp_rl import PPO
 from warp_rl import kernels as K
@@ -147,22 +147,12 @@ def test_loss_gradients_match_finite_differences():
 
 
 def test_training_improves_return():
-    cfg = rl_common.default_config(
-        "cartpole", backend="warp", num_envs=128, num_steps=32, total_timesteps=128 * 32 * 12, seed=0
+    trainer, first, last = support.assert_learns(
+        "cartpole", "warp", iterations=12, gain=30.0, num_envs=128, num_steps=32
     )
-    trainer = rl_common.make_trainer(cfg)
-    history = []
-    trainer.train(callback=lambda s: history.append(s["episodic_return"]))
-
-    first, last = np.mean(history[:2]), np.mean(history[-2:])
-    assert last > first + 30.0, f"return did not improve: {first:.1f} -> {last:.1f}"
-
     result = trainer.evaluate(num_envs=32)
     assert result["mean_return"] > 100.0, f"greedy policy is weak: {result}"
-    print(
-        f"training improves return {first:.1f} -> {last:.1f} in {cfg.num_iterations} iterations "
-        f"(greedy eval {result['mean_return']:.1f})"
-    )
+    print(f"training improves return {first:.1f} -> {last:.1f} (greedy eval {result['mean_return']:.1f})")
 
 
 def test_rollout_graph_matches_eager():

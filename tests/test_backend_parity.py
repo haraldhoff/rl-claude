@@ -28,6 +28,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import rl_common
+import support
 from rl_common import to_numpy
 
 NUM_ENVS = 16
@@ -258,14 +259,9 @@ def test_both_backends_learn_cartpole():
     """A short run on each backend should improve by a similar amount."""
     results = {}
     for backend in ("warp", "jax"):
-        cfg = rl_common.default_config("cartpole", backend=backend, total_timesteps=8192 * 8, seed=0)
-        trainer = rl_common.make_trainer(cfg)
-        history = []
-        trainer.train(callback=lambda s: history.append(s["episodic_return"]))
-        results[backend] = (np.mean(history[:2]), np.mean(history[-2:]))
+        _, first, last = support.assert_learns("cartpole", backend, iterations=8, gain=30.0)
+        results[backend] = (first, last)
 
-    for backend, (first, last) in results.items():
-        assert last > first + 30.0, f"{backend} did not learn: {first:.1f} -> {last:.1f}"
     warp_gain = results["warp"][1] - results["warp"][0]
     jax_gain = results["jax"][1] - results["jax"][0]
     assert abs(warp_gain - jax_gain) < 0.6 * max(warp_gain, jax_gain), (results, "learning curves diverge")

@@ -22,6 +22,7 @@ import gymnasium as gym
 
 import rl_common
 from rl_common import to_numpy
+import support
 from rl_common.gym_api import GymEnv, gym_id, register
 
 BACKENDS = ["warp", "jax"]
@@ -106,14 +107,7 @@ def test_sb3_vec_env_adapter_semantics():
 
 @pytest.mark.parametrize("env_backend", ["warp", "jax"])
 def test_sb3_trains_on_our_environments(env_backend):
-    cfg = rl_common.default_config(
-        "cartpole", backend="sb3", env_backend=env_backend, total_timesteps=8192 * 8, seed=0
-    )
-    trainer = rl_common.make_trainer(cfg)
-    history = []
-    trainer.train(callback=lambda s: history.append(s["episodic_return"]))
-    first, last = np.mean(history[:2]), np.mean(history[-2:])
-    assert last > first + 30.0, f"sb3 on {env_backend} did not learn: {first:.1f} -> {last:.1f}"
+    _, first, last = support.assert_learns("cartpole", "sb3", iterations=8, gain=30.0, env_backend=env_backend)
     print(f"sb3 learner on the {env_backend} cartpole: return {first:.0f} -> {last:.0f}")
 
 

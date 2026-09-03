@@ -44,7 +44,7 @@ class PPO(Trainer):
             disable_graph=cfg.use_graph,
         )
 
-        self.sample_actions, self.greedy_actions = K.make_action_kernels(self.env.num_actions)
+        self.sample_actions, _ = K.make_action_kernels(self.env.num_actions)  # the trainer only samples
         self.ppo_loss, self.ppo_metrics = K.make_loss_kernels(self.env.num_actions)
 
         T, N, B, M = cfg.num_steps, cfg.num_envs, cfg.batch_size, cfg.minibatch_size

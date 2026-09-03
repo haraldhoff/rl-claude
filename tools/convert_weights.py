@@ -83,8 +83,11 @@ def main() -> None:
     p.add_argument("source")
     p.add_argument("destination")
     p.add_argument("--env", type=str, required=True, help=f"environment id: {', '.join(rl_common.env_ids())}")
-    p.add_argument("--from", dest="source_backend", type=str, required=True, choices=rl_common.BACKENDS)
-    p.add_argument("--to", dest="target_backend", type=str, required=True, choices=rl_common.BACKENDS)
+    # warp and jax only: SB3 keeps a torch pickle, not a named-array checkpoint,
+    # and offering it here dispatched --from sb3 to jax_to_warp without a word
+    convertible = ("warp", "jax")
+    p.add_argument("--from", dest="source_backend", type=str, required=True, choices=convertible)
+    p.add_argument("--to", dest="target_backend", type=str, required=True, choices=convertible)
     args = p.parse_args()
 
     if args.source_backend == args.target_backend:

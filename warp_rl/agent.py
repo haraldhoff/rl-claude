@@ -125,19 +125,3 @@ class ActorCritic(Agent):
         data = np.load(path)
         for k, v in self.state_dict().items():
             wp.copy(v, wp.array(data[k], dtype=v.dtype, device=v.device))
-
-
-class _ActionScratch:
-    """Per-batch-size kernels and buffers behind :meth:`ActorCritic.act`."""
-
-    def __init__(self, size: int, obs_dim: int, num_actions: int, seed: int, device):
-        from .kernels import make_action_kernels
-        from .vec_env import seed_kernel
-
-        self.size = size
-        self.sample, self.greedy = make_action_kernels(num_actions)
-        self.actions = wp.zeros(size, dtype=wp.int32, device=device)
-        self.log_probs = wp.zeros(size, dtype=wp.float32, device=device)
-        self.obs = wp.zeros((size, obs_dim), dtype=wp.float32, device=device)
-        self.rng_states = wp.zeros(size, dtype=wp.uint32, device=device)
-        wp.launch(seed_kernel, dim=size, inputs=[seed, self.rng_states], device=device)

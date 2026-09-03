@@ -46,6 +46,7 @@ from ..vec_env import WarpVecEnv
 class LanderParams:
     gravity: float
     dt: float
+    fps: float
     substeps: int
     mass: float
     inertia: float
@@ -72,6 +73,7 @@ def default_params() -> LanderParams:
     p = LanderParams()
     p.gravity = spec.GRAVITY
     p.dt = 1.0 / spec.FPS
+    p.fps = spec.FPS
     p.substeps = spec.SUBSTEPS
     p.mass = spec.MASS
     p.inertia = spec.INERTIA
@@ -146,10 +148,10 @@ def write_observation(
 
     s0 = (origin[0] - half_w) / half_w
     s1 = (origin[1] - (params.helipad_y + params.leg_down)) / half_h
-    s2 = vel[0] * half_w / 50.0
-    s3 = vel[1] * half_h / 50.0
+    s2 = vel[0] * half_w / params.fps
+    s3 = vel[1] * half_h / params.fps
     s4 = angle
-    s5 = 20.0 * omega / 50.0
+    s5 = 20.0 * omega / params.fps
 
     obs[i, 0] = s0
     obs[i, 1] = s1

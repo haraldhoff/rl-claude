@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import rl_common
 from rl_common import to_numpy
+import support
 from rl_common.specs import lunar_lander as ll
 
 BACKENDS = ["warp", "jax"]
@@ -223,19 +224,15 @@ def test_heuristic_controller_lands(backend):
     )
 
 
-def test_training_improves_return():
-    """Warp only: the JAX backend runs this environment on CPU here, which is
-    minutes rather than seconds -- ``tests/test_backend_parity.py`` covers that
-    its PPO learns."""
-    cfg = rl_common.default_config(
-        "lunarlander", backend="warp", num_envs=256, num_steps=64, total_timesteps=256 * 64 * 40, seed=0
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_training_improves_return(backend):
+    """Both backends: 40 iterations is ~19 s on either now that JAX has a GPU
+    build.  This was Warp-only while jaxlib was CPU-only and the same run took
+    minutes."""
+    _, first, last = support.assert_learns(
+        "lunarlander", backend, iterations=40, gain=50.0, window=3, num_envs=256, num_steps=64
     )
-    trainer = rl_common.make_trainer(cfg)
-    history = []
-    trainer.train(callback=lambda s: history.append(s["episodic_return"]))
-    first, last = np.mean(history[:3]), np.mean(history[-3:])
-    assert last > first + 50.0, f"return did not improve: {first:.1f} -> {last:.1f}"
-    print(f"short PPO run improves return {first:.1f} -> {last:.1f}")
+    print(f"[{backend}] short PPO run improves return {first:.1f} -> {last:.1f}")
 
 
 if __name__ == "__main__":
@@ -247,5 +244,5 @@ if __name__ == "__main__":
         test_gravity_and_main_engine_thrust(backend)
         test_crash_and_out_of_bounds_terminate(backend)
         test_heuristic_controller_lands(backend)
-    test_training_improves_return()
+        test_training_improves_return(backend)
     print("all lunar lander checks passed")

@@ -14,7 +14,7 @@ python scripts/train.py --env cartpole --backend jax      # the same run in JAX 
 python scripts/train.py --env cartpole --backend sb3      # ... or SB3's reference PPO
 python scripts/train.py --env cartpole --backend sb3 --env-backend gym   # SB3 on stock Gymnasium
 python scripts/play.py  --env lunarlander --weights weights/lunarlander.npz   # watch it fly
-python -m pytest tests -q                                 # 89 checks, all backends
+python -m pytest tests -q                                 # 99 checks, all backends
 ```
 
 ![lunar lander landing on the pad](media/lunarlander.gif)
@@ -60,8 +60,9 @@ jax_rl/        backend: pure-function envs + Flax networks + jitted PPO
 sb3_rl/        backend: SB3's PPO on our envs through a VecEnv adapter
 scripts/       train.py  --env {cartpole,lunarlander,mountaincar} --backend {warp,jax,sb3}
                play.py   same flags, plus recording and N-environment grids
-tests/         per-environment checks (all backends), cross-backend parity,
-               the shared core (CLI/registry/checkpoint portability)
+tests/         per-environment checks (all backends), the 3x3 problem x
+               trainer matrix, cross-backend parity, the shared core
+               (CLI/registry/checkpoint portability)
 tools/         Box2D cross-check for the lander, warp <-> jax weight conversion
 ```
 
@@ -98,7 +99,7 @@ interface as the others, and `sb3_rl/ppo.py` drives `stable_baselines3.PPO` one
 iteration at a time from the *shared* training loop.
 
 Roughly 1400 lines of shared code, 1850 of Warp, 1100 of JAX, 430 of SB3 glue,
-and 1550 of tests.
+and 1800 of tests.
 
 ## What is shared, and what is not
 
@@ -330,7 +331,7 @@ uv sync --extra all      # everything, which is what the test suite wants
 
 A partial install is a supported way to run the tests: `tests/conftest.py`
 turns anything needing an absent extra into a skip -- `--extra jax` alone gives
-32 passed, 19 skipped -- so `--extra all` is what the suite wants only in the
+36 passed, 25 skipped -- so `--extra all` is what the suite wants only in the
 sense that it is the one install that runs all of it.
 
 The remaining extras are `gym` (space objects, the Gymnasium adapter, the parity
