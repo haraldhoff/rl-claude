@@ -24,31 +24,66 @@ python -m pytest tests -q                                 # 99 checks, all backe
 ## Results
 
 Greedy evaluation over 128 episodes, with each environment's recommended
-settings -- the same hyperparameters for all three backends.
+settings -- the same hyperparameters for all three backends, and every backend
+on the GPU (an RTX PRO 2000 Blackwell laptop card, 8 GB), one seed, one process
+per pair so the three runtimes never share the device.
 
 | environment | warp | jax | sb3 | budget | solved |
 | --- | --- | --- | --- | --- | --- |
 | cartpole | **500.0 +/- 0.0** | **500.0 +/- 0.0** | **500.0 +/- 0.0** | 500k steps | 475 |
-| mountaincar | **-102.0 +/- 8.8** | **-98.4 +/- 9.0** | **-101.8 +/- 8.7** | 4M decisions | -110 |
-| lunarlander | **274.5 +/- 18.6** | **286.2 +/- 29.1** | **282.5 +/- 19.6** | 16M steps | 200 |
+| mountaincar | **-102.0 +/- 8.9** | **-99.0 +/- 9.4** | **-99.2 +/- 7.0** | 4M decisions | -110 |
+| lunarlander | **273.4 +/- 19.8** | **286.5 +/- 17.9** | **283.8 +/- 19.5** | 16M steps | 200 |
 
-Wall clock for those runs: cartpole ~5 s (warp) / 24 s (jax) / 17 s (sb3);
-mountain car ~8 s / 63 s / 45 s; the lander ~60 s / 12 min / 3.5 min.
+Training wall clock for those runs, excluding process start and the final
+evaluation: cartpole 2.9 s (warp) / 10.0 s (jax) / 24.2 s (sb3); mountain car
+7.7 s / 15.7 s / 54.0 s; the lander 62 s / 32 s / 133 s.
 
-The JAX and SB3 backends are reproducible run to run; the Warp one is not --
-its PPO loss is accumulated with `wp.atomic_add`, and float addition on the GPU
-is order-dependent, so the same seed lands within a band (a 65k-step cartpole
-run scored 251, 314, 327 and 337 across four repeats) rather than on a number.
+The checkpoints in `weights/` -- what `scripts/play.py --weights` replays --
+are earlier Warp runs, and score 500.0 +/- 0.0, -102.0 +/- 8.8 and
+274.5 +/- 18.6 under the same evaluation.  That is the band the table's Warp
+column moves in: the JAX and SB3 backends are reproducible run to run *on a
+fixed device*, the Warp one is not -- its PPO loss is accumulated with
+`wp.atomic_add`, and float addition on the GPU is order-dependent, so the same
+seed lands within a band (a 65k-step cartpole run scored 251, 314, 327 and 337
+across four repeats) rather than on a number.  Moving a backend between the CPU
+and the GPU moves its numbers too, which is why the JAX and SB3 columns here
+differ slightly from the CPU-measured ones they replace.
 
-Throughput on this machine: Warp reaches 85k-170k env steps/s on cartpole,
-~290k on the lander and ~520k on mountain car, *including* the PPO update. SB3
-(torch on the CPU, driving our Warp environments) gets 29k / 75k / 89k, and its
-cost is the per-step host round-trip its `VecEnv` API requires. The JAX numbers
-were measured against a **CPU-only** jaxlib, before the `jax` extra asked for a
-CUDA build, so they describe a different machine class rather than a different
-algorithm: ~21k steps/s on cartpole, ~63k on mountain car and ~23k on the
-lander. The extra now installs `jax[cuda13]` on Linux, so the same code runs on
-the GPU and those three numbers are due a re-measurement.
+Throughput, as steady-state environment steps/s *including* the PPO update,
+measured over the iterations after the first two -- those pay for kernel
+compilation, CUDA-graph capture or the JIT trace:
+
+| | cartpole | mountaincar | lunarlander |
+| --- | --- | --- | --- |
+| warp | 185k | 548k | 262k |
+| jax | 340k | 550k | **971k** |
+| sb3, torch on the GPU | 22k | 83k | 123k |
+| sb3, torch on the CPU | 29k | 89k | 75k |
+
+Warp's cost is flat -- a 0.3 s first iteration, then the same 30-125 ms forever.
+JAX pays all of it up front, an 8-16 s trace and then 24-34 ms iterations, so
+its average over a whole run (50k / 254k / 494k) sits far below its steady state
+and a short run is mostly compilation.  `trainer.evaluate()` triggers a *second*
+compile, because the evaluation environment has a different `num_envs` and
+`autoreset=False`: 6.2 s on cartpole, more than that run's entire training time.
+
+Those JAX figures replace the ones this README carried until they were
+re-measured (21k / 63k / 23k), which came from a **CPU-only** jaxlib, before the
+`jax` extra asked for a CUDA build.  The extra now installs `jax[cuda13]` on
+Linux, and on the GPU the same code is 8-42x faster -- enough to change the
+ranking rather than just the scale.  JAX is the fastest backend on the lander,
+at 3.7x Warp and half its wall clock; Warp keeps cartpole, where the batch is
+too small for XLA to amortize its per-iteration overhead, and the two tie on
+mountain car.
+
+SB3's cost is still the per-step host round-trip its `VecEnv` API requires, and
+putting its policy on the GPU is a trade rather than a win: it loses 25% on
+cartpole and 7% on mountain car, where launch overhead dominates a small MLP,
+and gains 64% on the lander, whose 512 x 64 batch and 128-wide network are big
+enough to pay it back.  Leave SB3 on the CPU for everything but the lander.
+
+Peak host memory, for the same runs: 355 MB (warp), 1.5-1.7 GB (jax), 2.25 GB
+(sb3).
 
 ## Layout
 
